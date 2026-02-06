@@ -1,7 +1,8 @@
 // src/hooks/useDrone.js
 import { ref, reactive, markRaw } from 'vue'
 import axios from 'axios'
-import { LOCATIONS } from './useCesiumMap'
+import * as Cesium from 'cesium'
+import gcoord from 'gcoord'
 import { Drone } from '../classes/Drone'
 import { WeatherSystem } from '../classes/WeatherSystem'
 
@@ -50,16 +51,41 @@ export function useDrone(viewerRef, hospitalPressure) {
       // 调用后端路径规划接口，获取配送方式推荐（无人机/车辆）
       const res = await axios.post('http://127.0.0.1:8000/api/plan_route', {
         resource_id: resource.id,
-        start_node: "START",
-        end_node: "END"
-      });
+        // 这里必须传「路网节点」里存在的名字，才能算出路径
+        // 对应 backend/data/road_nodes.json 里的 name 字段
+        start_node: '西直门桥',
+        end_node: '东直门桥',
+      })
 
-      const result = res.data;
-      const isDrone = result.analysis[0].recommend;
+      const result = res.data
+      const isDrone = result.recommend
+      const rawPath = result.path
 
-      // 地图实例初始化完成后，创建载体并执行飞行/行驶
-      if (viewerRef.value) {
-        createAndFly(isDrone, resource.id);
+      if (viewerRef.value && rawPath && rawPath.length > 0) {
+        // 关键：把 GCJ02 转为 WGS84，适配 Cesium
+        const wgs84Path = rawPath.map((pt) =>
+          gcoord.transform(pt, gcoord.GCJ02, gcoord.WGS84)
+        )
+
+        // 调试用：在地面画一条绿色细线，看路径是否沿着马路
+        const viewer = viewerRef.value
+        const flat = []
+        for (const [lng, lat] of wgs84Path) {
+          flat.push(lng, lat, 0)
+        }
+        viewer.entities.add({
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat),
+            width: 2,
+            material: Cesium.Color.LIME.withAlpha(0.8),
+            clampToGround: true,
+          },
+        })
+
+        // 创建并起飞
+        createAndFly(isDrone, resource.id, wgs84Path)
+      } else {
+        alert('后端未返回有效路径！')
       }
     } catch (error) {
       console.error("资源调度路径规划请求失败:", error);
@@ -68,7 +94,7 @@ export function useDrone(viewerRef, hospitalPressure) {
   }
 
   // 根据后端推荐结果，创建无人机/车辆并执行飞行/行驶逻辑
-  const createAndFly = (isDrone, resourceId) => {
+  const createAndFly = (isDrone, resourceId, pathData) => {
     const viewer = viewerRef.value;
     if (!viewer) return;
 
@@ -85,23 +111,11 @@ export function useDrone(viewerRef, hospitalPressure) {
       console.log(`载体 ${finishedId} 已完成配送任务，到达目的地！`);
     };
 
-    // 区分载体类型，设置路线偏移（避免多载体路线重叠，适配地图展示）
+    // 区分载体类型（无人机 / 救护车）
     const type = isDrone ? 'DRONE' : 'AMBULANCE';
-    // 深拷贝基础点位，避免修改原数据
-    const offsetRoutes = JSON.parse(JSON.stringify(LOCATIONS));
-    if (!isDrone) {
-      // 车辆路线：纬度偏移0.002
-      offsetRoutes.END.lat += 0.002;
-      offsetRoutes.START.lat += 0.002;
-    } else {
-      // 无人机路线：根据机队数量，经度逐次偏移0.001
-      if (droneFleet.size > 0) {
-        offsetRoutes.END.lng += 0.001 * droneFleet.size;
-      }
-    }
 
-    // 执行载体的飞行/行驶方法
-    newVehicle.flyTo(offsetRoutes, type);
+    // 执行载体的飞行/行驶方法：直接吃经过纠偏的路径数组
+    newVehicle.flyTo(pathData, type);
 
     // 将新载体加入机队统一管理
     droneFleet.set(id, newVehicle);

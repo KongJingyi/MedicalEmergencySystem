@@ -19,51 +19,54 @@ export class Drone {
   }
 
   /**
-   * 核心方法：执行飞行任�?
-   * @param {Object} routeData - 包含起点、终点、拐点的路径数据
-   * @param {String} type - 载具类型 ('DRONE' �? 'AMBULANCE')
+   * 核心方法：执行飞行任务
+   * @param {Array<[number, number]>} pathPoints - 后端返回的路径数组 [[lng, lat], [lng, lat], ...]
+   * @param {String} type - 载具类型 ('DRONE' 或 'AMBULANCE')
    */
-  flyTo(routeData, type = 'DRONE') {
-    this.status = 'FLYING';
-    
+  flyTo(pathPoints, type = 'DRONE') {
+    this.status = 'FLYING'
+
     // 1. 读取配置
-    this.typeConfig = VEHICLE_TYPES[type] || VEHICLE_TYPES.DRONE;
+    this.typeConfig = VEHICLE_TYPES[type] || VEHICLE_TYPES.DRONE
 
-    // 2. 计算路径 (传入配置的高�?)
-    const { start, stop, waypoints } = this._calculatePath(routeData, this.typeConfig.flyHeight);
+    // 2. 调用新的路径计算方法，传入数组
+    const { start, stop, waypoints } = this._calculatePath(
+      pathPoints,
+      this.typeConfig.flyHeight
+    )
 
-    // 3. 【核心算法】计算修正后的朝�?
-    const orientationProperty = this._getCorrectedOrientation(waypoints, this.typeConfig.fixHeading);
+    // 3. 计算姿态（保持之前的防弹版代码不变）
+    const orientationProperty = this._getCorrectedOrientation(
+      waypoints,
+      this.typeConfig.fixHeading
+    )
 
     // 4. 创建实体
     this.entity = this.viewer.entities.add({
-      id: this.id, // 给实体绑�? ID
-      availability: new Cesium.TimeIntervalCollection([new Cesium.TimeInterval({ start: start, stop: stop })]),
+      id: this.id,
+      availability: new Cesium.TimeIntervalCollection([
+        new Cesium.TimeInterval({ start, stop }),
+      ]),
       position: waypoints,
-      // 使用修正后的朝向
       orientation: orientationProperty,
-      
-      // 模型配置（从配置读取�?
       model: {
         uri: this.typeConfig.modelUri,
         minimumPixelSize: this.typeConfig.minimumPixelSize,
         scale: this.typeConfig.scale,
         runAnimations: true,
       },
-      
-      // 路径线（从配置读取颜色）
       path: {
         resolution: 1,
         material: new Cesium.PolylineGlowMaterialProperty({
           glowPower: 0.2,
-          color: this.typeConfig.pathColor
+          color: this.typeConfig.pathColor,
         }),
-        width: 6
-      }
-    });
+        width: 6,
+      },
+    })
 
-    // 5. 监听是否到达 (私有方法)
-    this._listenArrival(stop);
+    // 5. 监听到达
+    this._listenArrival(stop)
   }
 
   /**
@@ -84,37 +87,64 @@ export class Drone {
 
   // ================= 私有辅助方法 =================
 
-  // 内部计算路径 (支持动态高�?)
-  _calculatePath(routeData, height) {
-    const start = Cesium.JulianDate.now();
-    const duration = 40; // 飞行40�?
-    const stop = Cesium.JulianDate.addSeconds(start, duration, new Cesium.JulianDate());
-    
-    // 设置地图时钟 (注意：多机协同如果强行改全局时钟可能会有冲突�?
-    // 完美方案是后端计算好绝对时间，Day 3-4 我们先假设以第一架飞机的时间为准)
-    if (!this.viewer.clock.shouldAnimate) {
-        this.viewer.clock.startTime = start.clone();
-        this.viewer.clock.stopTime = stop.clone();
-        this.viewer.clock.currentTime = start.clone();
-        this.viewer.clock.clockRange = Cesium.ClockRange.CLAMPED;
-        this.viewer.clock.shouldAnimate = true;
+  /**
+   * 根据坐标数组计算平滑轨迹
+   */
+  _calculatePath(pathPoints, height) {
+    const start = Cesium.JulianDate.now()
+    const property = new Cesium.SampledPositionProperty()
+
+    // 设定速度 (米/秒)：高度高的认为是无人机（快），高度低的是救护车（慢）
+    const speed = height > 10 ? 30 : 15
+
+    let currentTime = start.clone()
+
+    // 遍历每一个坐标点
+    for (let i = 0; i < pathPoints.length; i++) {
+      const pt = pathPoints[i] // [lng, lat]
+      const position = Cesium.Cartesian3.fromDegrees(pt[0], pt[1], height)
+
+      if (i === 0) {
+        // 起点
+        property.addSample(currentTime, position)
+      } else {
+        // 计算与上一个点的距离
+        const prevPt = pathPoints[i - 1]
+        const prevPos = Cesium.Cartesian3.fromDegrees(prevPt[0], prevPt[1], height)
+        const distance = Cesium.Cartesian3.distance(prevPos, position)
+
+        // 时间 = 距离 / 速度，防止距离为 0 导致时间停滞
+        const duration = distance / speed > 0 ? distance / speed : 0.1
+
+        // 累加时间
+        currentTime = Cesium.JulianDate.addSeconds(
+          currentTime,
+          duration,
+          new Cesium.JulianDate()
+        )
+
+        property.addSample(currentTime, position)
+      }
     }
 
-    const property = new Cesium.SampledPositionProperty();
-    
-    // 使用传入�? height 参数
-    property.addSample(start, Cesium.Cartesian3.fromDegrees(routeData.START.lng, routeData.START.lat, height));
-    property.addSample(
-      Cesium.JulianDate.addSeconds(start, 10, new Cesium.JulianDate()), 
-      Cesium.Cartesian3.fromDegrees(116.360, 39.938, height)
-    );
-    property.addSample(
-      Cesium.JulianDate.addSeconds(start, 25, new Cesium.JulianDate()), 
-      Cesium.Cartesian3.fromDegrees(116.368, 39.942, height)
-    );
-    property.addSample(stop, Cesium.Cartesian3.fromDegrees(routeData.END.lng, routeData.END.lat, height));
+    // 最后一个点的时间就是结束时间
+    const stop = currentTime.clone()
 
-    return { start, stop, waypoints: property };
+    // 如果只有一个点（异常情况），强行加 1 秒防止报错
+    if (Cesium.JulianDate.equals(start, stop)) {
+      Cesium.JulianDate.addSeconds(stop, 1, stop)
+    }
+
+    // 确保场景时钟覆盖本次任务的时间区间，否则实体不会显示/运动
+    if (!this.viewer.clock.shouldAnimate) {
+      this.viewer.clock.startTime = start.clone()
+      this.viewer.clock.stopTime = stop.clone()
+      this.viewer.clock.currentTime = start.clone()
+      this.viewer.clock.clockRange = Cesium.ClockRange.CLAMPED
+      this.viewer.clock.shouldAnimate = true
+    }
+
+    return { start, stop, waypoints: property }
   }
 
   // ?���ռ��޸��桿��̬�����㷨 ?

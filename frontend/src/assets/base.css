@@ -1,0 +1,39 @@
+/* 引入谷歌的科幻字体 Orbitron 和 Rajdhani */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap');
+
+:root {
+  --neon-blue: #00d2ff;
+  --neon-red: #ff4d4f;
+  --bg-glass: rgba(10, 20, 40, 0.75);
+  --border-color: rgba(0, 210, 255, 0.3);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #000;
+  color: white;
+  font-family: 'Rajdhani', sans-serif; /* 正文使用 */
+  overflow: hidden; /* 禁止出现滚动条 */
+}
+
+/* 标题和数字用 Orbitron */
+h1, h2, h3, .digital-font {
+  font-family: 'Orbitron', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--neon-blue);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.5);
+}
+
