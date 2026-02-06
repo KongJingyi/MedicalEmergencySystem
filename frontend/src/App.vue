@@ -4,33 +4,35 @@ import axios from 'axios'
 import Dashboard from './components/Dashboard.vue'
 import DroneCam from './components/DroneCam.vue'
 
-// 引入我们刚才写的 Hooks
+// 引入Cesium地图和无人机相关的hook
 import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
 
-// 1. 业务数据状态
+// 资源列表数据（后端接口获取）
 const resources = ref([]) 
+// 医院压力值（用于无人机调度决策）
 const hospitalPressure = ref(0) 
 
-// 2. 初始化地图 Hook
+// 解构Cesium地图Hook的方法和响应式对象
 const { viewerRef, initMap, addMarkers } = useCesiumMap()
 
-// 3. 初始化无人机 Hook (把 viewerRef 和 压力值 传进去)
-const { currentVehicle, dispatch } = useDrone(viewerRef, hospitalPressure, addMarkers)
+// 解构无人机Hook的方法和响应式对象，传入地图实例和医院压力值
+const { activeDroneEntity, dispatch, showCamera, viewVehicle, closeCamera, changeWeather } = useDrone(viewerRef, hospitalPressure)
 
-// 获取物资列表 (这个很简单，可以先留在这里，以后也可以抽离)
+// 从后端接口获取资源列表数据
 const fetchResources = async () => {
   try {
     const res = await axios.get('http://127.0.0.1:8000/api/resources')
     resources.value = res.data
   } catch (e) { 
-    console.error("后端连不上", e) 
+    console.error("资源列表数据请求失败，请检查接口服务是否正常", e) 
   }
 }
 
 onMounted(() => {
-  // 一行代码启动地图
+  // 初始化Cesium地图容器
   initMap('cesiumContainer')
+  // 获取资源数据
   fetchResources()
 })
 </script>
@@ -39,28 +41,39 @@ onMounted(() => {
   <div id="cesiumContainer"></div>
   
   <div class="header-bar">
-    <h2>? 城市医疗应急资源联运指挥中心</h2>
+    <h2>无人机调度监控系统 - 医院资源调配可视化平台</h2>
   </div>
 
   <Dashboard :hospitalPressure="hospitalPressure" />
 
   <DroneCam 
-    v-if="currentVehicle && viewerRef" 
+    v-if="showCamera && activeDroneEntity && viewerRef" 
     :mainViewer="viewerRef" 
-    :vehicle="currentVehicle" 
+    :vehicle="activeDroneEntity" 
+    @close="closeCamera"
   />
 
+  <div class="weather-controls">
+    <button @click="changeWeather('sunny')" title="晴天">☀️</button>
+    <button @click="changeWeather('rain')" title="下雨">🌧️</button>
+    <button @click="changeWeather('snow')" title="下雪">❄️</button>
+    <button @click="changeWeather('fog')" title="大雾">🌫️</button>
+  </div>
+
   <div class="test-panel" style="top: 80px;">
-    <h3>? 医疗资源应急调度台</h3>
+    <h3>待调配资源列表</h3>
     <ul>
       <li v-for="item in resources" :key="item.id" class="resource-item">
         <div class="info">
           <b>{{ item.name }}</b> 
-          <span class="tag" v-if="item.urgency_level >= 4">急救</span>
+          <span class="tag" v-if="item.urgency_level >= 4">紧急调配</span>
           <br>
-          <small>温控: {{ item.min_temp }}~{{ item.max_temp }}°C</small>
+          <small>适宜储存温度: {{ item.min_temp }}~{{ item.max_temp }}℃</small>
         </div>
-        <button @click="dispatch(item)" class="btn-dispatch">? 调度</button>
+        <div class="btn-group">
+          <button @click="dispatch(item)" class="btn-dispatch">调度无人机</button>
+          <button @click="viewVehicle(item.id)" class="btn-view" title="第一视角">👁️</button>
+        </div>
       </li>
     </ul>
   </div>
@@ -95,6 +108,32 @@ onMounted(() => {
 }
 .resource-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; }
 .tag { background: #ff4d4f; color: white; padding: 2px 5px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
+.btn-group { display: flex; gap: 10px; }
 .btn-dispatch { background: linear-gradient(45deg, #ff4d4f, #ff7875); border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
 .btn-dispatch:hover { transform: scale(1.05); }
+.btn-view { background: rgba(0, 210, 255, 0.2); border: 1px solid #00d2ff; color: white; padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: all 0.3s; }
+.btn-view:hover { background: rgba(0, 210, 255, 0.5); transform: scale(1.05); }
+
+.weather-controls {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2000;
+  display: flex;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #00d2ff;
+}
+.weather-controls button {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.weather-controls button:hover {
+  transform: scale(1.2);
+}
 </style>
