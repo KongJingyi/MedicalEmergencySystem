@@ -1,0 +1,114 @@
+{
+  "description": "路网连接关系图，定义节点之间的邻接关系",
+  "edges": [
+    {
+      "from": 0,
+      "to": 1,
+      "distance_km": 6.667,
+      "time_minutes": 12
+    },
+    {
+      "from": 0,
+      "to": 4,
+      "distance_km": 2.368,
+      "time_minutes": 8
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "distance_km": 3.553,
+      "time_minutes": 5
+    },
+    {
+      "from": 2,
+      "to": 6,
+      "distance_km": 1.701,
+      "time_minutes": 4
+    },
+    {
+      "from": 3,
+      "to": 7,
+      "distance_km": 1.846,
+      "time_minutes": 4
+    },
+    {
+      "from": 4,
+      "to": 5,
+      "distance_km": 2.418,
+      "time_minutes": 6
+    },
+    {
+      "from": 5,
+      "to": 6,
+      "distance_km": 3.529,
+      "time_minutes": 5
+    },
+    {
+      "from": 6,
+      "to": 10,
+      "distance_km": 2.002,
+      "time_minutes": 3
+    },
+    {
+      "from": 7,
+      "to": 11,
+      "distance_km": 2.601,
+      "time_minutes": 4
+    },
+    {
+      "from": 10,
+      "to": 11,
+      "distance_km": 3.695,
+      "time_minutes": 10
+    },
+    {
+      "from": 10,
+      "to": 12,
+      "distance_km": 0.587,
+      "time_minutes": 2
+    },
+    {
+      "from": 12,
+      "to": 13,
+      "distance_km": 1.355,
+      "time_minutes": 3
+    },
+    {
+      "from": 13,
+      "to": 14,
+      "distance_km": 2.713,
+      "time_minutes": 1
+    },
+    {
+      "from": 14,
+      "to": 9,
+      "distance_km": 5.845,
+      "time_minutes": 5
+    },
+    {
+      "from": 15,
+      "to": 16,
+      "distance_km": 6.677,
+      "time_minutes": 11
+    },
+    {
+      "from": 6,
+      "to": 17,
+      "distance_km": 8.865,
+      "time_minutes": 4
+    },
+    {
+      "from": 3,
+      "to": 18,
+      "distance_km": 10.071,
+      "time_minutes": 3
+    },
+    {
+      "from": 1,
+      "to": 19,
+      "distance_km": 2.5,
+      "time_minutes": 6
+    }
+  ],
+  "note": "from/to 是 road_nodes.json 数组中的索引（从0开始）。你可以根据实际路网补充更多连接关系。"
+}

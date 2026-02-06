@@ -39,7 +39,7 @@ export function useCesiumMap() {
 
   const initMap = async (containerId) => {
     // 1. 设置 Token
-    Cesium.Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJhYWFlNTlhNi1kMjA1LTRmNmUtOGU5Mi00MTNiYmU4NjQzNDAiLCJpZCI6MzI3MTAxLCJpYXQiOjE3Njk1NzkzMjh9.urt5EDHgyCAJVzppAaz4IOZS4PcTRxHiawrq4qH2BiU'; 
+    Cesium.Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIxOTJkMGQ1Yi02MDAzLTQ1ZmItYmE2OS03YjI4NTEyMDFhMTIiLCJpZCI6MzI0MjU4LCJpYXQiOjE3NTMyNjUzMTV9.q1G99hnGlMCEbM-QRVPlQukQYuXBad50VSHenwtlOoo'; 
 
     // 2. 加载地形 (带容错)
     let terrainProvider;
