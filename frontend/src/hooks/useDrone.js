@@ -3,6 +3,7 @@ import { ref, reactive, markRaw } from 'vue'
 import axios from 'axios'
 import { LOCATIONS } from './useCesiumMap'
 import { Drone } from '../classes/Drone'
+import { WeatherSystem } from '../classes/WeatherSystem'
 
 export function useDrone(viewerRef, hospitalPressure) {
   // 1. 无人机机队管理 (Map映射: 载体ID -> Drone实例，统一管理所有无人机/车辆)
@@ -13,6 +14,33 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // 3. 是否显示无人机第一视角窗口 (控制DroneCam组件的显隐)
   const showCamera = ref(false)
+
+  // 4. 天气系统实例（懒加载）
+  let weatherSystem = null
+
+  const initWeather = () => {
+    if (viewerRef.value && !weatherSystem) {
+      weatherSystem = new WeatherSystem(viewerRef.value)
+    }
+  }
+
+  const changeWeather = (type) => {
+    if (!weatherSystem) initWeather()
+    switch (type) {
+      case 'rain':
+        weatherSystem.setRain()
+        break
+      case 'snow':
+        weatherSystem.setSnow()
+        break
+      case 'fog':
+        weatherSystem.setFog()
+        break
+      default:
+        weatherSystem.setSunny()
+        break
+    }
+  }
 
   // ================= 无人机调度核心方法 =================
 
@@ -126,6 +154,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     dispatch,
     viewVehicle,
     closeCamera,
-    clearAll
+    clearAll,
+    changeWeather,
   }
 }

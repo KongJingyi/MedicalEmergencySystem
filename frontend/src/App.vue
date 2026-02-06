@@ -4,20 +4,20 @@ import axios from 'axios'
 import Dashboard from './components/Dashboard.vue'
 import DroneCam from './components/DroneCam.vue'
 
-// 引入Cesium地图和无人机相关的Hook
+// 引入Cesium地图和无人机相关的hook
 import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
 
 // 资源列表数据（后端接口获取）
 const resources = ref([]) 
-// 医院压力值（用于无人机调度逻辑）
+// 医院压力值（用于无人机调度决策）
 const hospitalPressure = ref(0) 
 
 // 解构Cesium地图Hook的方法和响应式对象
 const { viewerRef, initMap, addMarkers } = useCesiumMap()
 
 // 解构无人机Hook的方法和响应式对象，传入地图实例和医院压力值
-const { activeDroneEntity, dispatch, showCamera, viewVehicle, closeCamera } = useDrone(viewerRef, hospitalPressure)
+const { activeDroneEntity, dispatch, showCamera, viewVehicle, closeCamera, changeWeather } = useDrone(viewerRef, hospitalPressure)
 
 // 从后端接口获取资源列表数据
 const fetchResources = async () => {
@@ -41,7 +41,7 @@ onMounted(() => {
   <div id="cesiumContainer"></div>
   
   <div class="header-bar">
-    <h2>无人机调度监控系统 - 医院资源配送可视化平台</h2>
+    <h2>无人机调度监控系统 - 医院资源调配可视化平台</h2>
   </div>
 
   <Dashboard :hospitalPressure="hospitalPressure" />
@@ -53,19 +53,26 @@ onMounted(() => {
     @close="closeCamera"
   />
 
+  <div class="weather-controls">
+    <button @click="changeWeather('sunny')" title="晴天">☀️</button>
+    <button @click="changeWeather('rain')" title="下雨">🌧️</button>
+    <button @click="changeWeather('snow')" title="下雪">❄️</button>
+    <button @click="changeWeather('fog')" title="大雾">🌫️</button>
+  </div>
+
   <div class="test-panel" style="top: 80px;">
-    <h3>待配送资源列表</h3>
+    <h3>待调配资源列表</h3>
     <ul>
       <li v-for="item in resources" :key="item.id" class="resource-item">
         <div class="info">
           <b>{{ item.name }}</b> 
-          <span class="tag" v-if="item.urgency_level >= 4">紧急配送</span>
+          <span class="tag" v-if="item.urgency_level >= 4">紧急调配</span>
           <br>
-          <small>适宜保存温度: {{ item.min_temp }}~{{ item.max_temp }}℃</small>
+          <small>适宜储存温度: {{ item.min_temp }}~{{ item.max_temp }}℃</small>
         </div>
         <div class="btn-group">
           <button @click="dispatch(item)" class="btn-dispatch">调度无人机</button>
-          <button @click="viewVehicle(item.id)" class="btn-view" title="第一视角">📷</button>
+          <button @click="viewVehicle(item.id)" class="btn-view" title="第一视角">👁️</button>
         </div>
       </li>
     </ul>
@@ -106,4 +113,27 @@ onMounted(() => {
 .btn-dispatch:hover { transform: scale(1.05); }
 .btn-view { background: rgba(0, 210, 255, 0.2); border: 1px solid #00d2ff; color: white; padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: all 0.3s; }
 .btn-view:hover { background: rgba(0, 210, 255, 0.5); transform: scale(1.05); }
+
+.weather-controls {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2000;
+  display: flex;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #00d2ff;
+}
+.weather-controls button {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.weather-controls button:hover {
+  transform: scale(1.2);
+}
 </style>
