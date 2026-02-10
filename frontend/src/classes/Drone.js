@@ -4,18 +4,18 @@ import { VEHICLE_TYPES } from '../config/VehicleConfig' // 引入配置
 
 export class Drone {
   /**
-   * 构造函数：�? new 一次，就诞生一架新飞机
+   * 构造函数：new 一次，就诞生一架新飞机
    * @param {Cesium.Viewer} viewer - 地图对象
-   * @param {String} id - 唯一编号 (�? "drone-001")
+   * @param {String} id - 唯一编号 ("drone-001")
    */
   constructor(viewer, id) {
     this.viewer = viewer;
     this.id = id;
-    this.entity = null; // 它是 Cesium 的实�?
+    this.entity = null; // 它是 Cesium 的实体
     this.status = 'IDLE'; // IDLE, FLYING, ARRIVED
     this.onArrivedCallback = null; // 到达后的回调
     this._onStopListener = null; // 保存监听器引用，方便清理
-    this.typeConfig = null; // 存储当前是哪种载�?
+    this.typeConfig = null; // 存储当前是哪种载具
   }
 
   /**
@@ -70,14 +70,14 @@ export class Drone {
   }
 
   /**
-   * 销毁自�? (从地图上移除)
+   * 销毁自定义 (从地图上移除)
    */
   remove() {
     if (this.entity) {
       this.viewer.entities.remove(this.entity);
       this.entity = null;
     }
-    // 移除监听�?
+    // 移除监听器
     if (this._onStopListener) {
       this.viewer.clock.onStop.removeEventListener(this._onStopListener);
       this._onStopListener = null;
@@ -147,11 +147,11 @@ export class Drone {
     return { start, stop, waypoints: property }
   }
 
-  // ?���ռ��޸��桿��̬�����㷨 ?
+  // 根据位置和固定朝向计算姿态
   _getCorrectedOrientation(positionProperty, fixHeadingDegrees) {
     const velocityOrientation = new Cesium.VelocityOrientationProperty(positionProperty);
     
-    // 1. Ԥ������ȷ�� fixHeadingDegrees �Ǹ���Ч�����֣����û������0��ֱ�ӷ���ԭ������
+    // 1. 预检查 fixHeadingDegrees 是否有效，如果无效直接返回原朝向
     const degrees = Number(fixHeadingDegrees);
     if (Number.isNaN(degrees) || degrees === 0) {
       return velocityOrientation;
@@ -172,14 +172,14 @@ export class Drone {
       // 安全获取原生朝向
       const originalQuat = velocityOrientation.getValue(time);
 
-      // 🚨【绝对防御】�?
+      // 🚨【绝对防御】
       // 只要 originalQuat 不是一个有效的对象，立刻返回默认值（不旋转）
-      // 不要�? undefined 进入 multiply 计算�?
+      // 不要 undefined 进入 multiply 计算
       if (!originalQuat) {
         return Cesium.Quaternion.clone(Cesium.Quaternion.IDENTITY, result);
       }
 
-      // 只有�? originalQuat �? correctionQuat 都是对象时，才进行乘�?
+      // 只有 originalQuat 和 correctionQuat 都是对象时，才进行乘法
       if (!result) {
         result = new Cesium.Quaternion();
       }
@@ -187,10 +187,10 @@ export class Drone {
     }, false);
   }
 
-  // 内部监听�?
+    // 内部监听到达事件
   _listenArrival(stopTime) {
     this._onStopListener = () => {
-      // 只有当时间匹配且自己还没到达�?
+      // 只有当时间匹配且自己还没到达时才触发
       if (this.viewer.clock.currentTime.equals(this.viewer.clock.stopTime) && this.status === 'FLYING') {
         this.status = 'ARRIVED';
         console.log(`Drone ${this.id} 已送达`);

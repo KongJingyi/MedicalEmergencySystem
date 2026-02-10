@@ -200,8 +200,9 @@ onMounted(() => {
   justify-content: space-between;
 }
 
-/* 恢复面板内部的点击交互 */
-.ui-layer :deep(.sci-fi-panel) {
+/* 恢复面板内部的点击交互
+   注意：:deep() 仅在 <style scoped> 中生效；这里是全局样式，因此用普通选择器 */
+.ui-layer .sci-fi-panel {
   pointer-events: auto;
 }
 

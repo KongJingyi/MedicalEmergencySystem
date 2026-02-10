@@ -108,7 +108,31 @@
       "to": 19,
       "distance_km": 2.5,
       "time_minutes": 6
-    }
+    } ,
+  {
+    "from": 19, 
+    "to": 0, 
+    "distance_km": 0.8, 
+    "time_minutes": 2
+  },
+  {
+    "from": 0, 
+    "to": 19, 
+    "distance_km": 0.8, 
+    "time_minutes": 2
+  },
+  {
+    "from": 20, 
+    "to": 4, 
+    "distance_km": 0.9, 
+    "time_minutes": 3
+  },
+  {
+    "from": 4, 
+    "to": 20, 
+    "distance_km": 0.9, 
+    "time_minutes": 3
+  }
   ],
   "note": "from/to 是 road_nodes.json 数组中的索引（从0开始）。你可以根据实际路网补充更多连接关系。"
 }
