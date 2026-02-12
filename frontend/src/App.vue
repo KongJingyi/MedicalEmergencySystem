@@ -90,7 +90,7 @@ onMounted(() => {
   <div class="ui-layer">
     <div class="left-panel">
       <PanelBox title="物资列表">
-        <ul>
+        <ul style="padding: 0; margin: 0; list-style: none;">
           <li
             v-for="item in resources"
             :key="item.id"
@@ -112,8 +112,10 @@ onMounted(() => {
         </ul>
       </PanelBox>
 
-      <PanelBox title="物资属性分析" style="margin-top: 20px;">
-        <ResourceRadar :data="selectedResource" />
+      <PanelBox title="物资属性分析" style="height: 380px;">
+        <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
+          <ResourceRadar :data="selectedResource" />
+        </div>
       </PanelBox>
     </div>
 
@@ -140,27 +142,55 @@ onMounted(() => {
   align-items: center;
 }
 .header-bar h2 {
-  color: #00d2ff;
-  font-family: "Microsoft YaHei", sans-serif;
-  text-shadow: 0 0 10px #00d2ff;
+  color: var(--neon-blue);
+  font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif;
+  text-shadow: 0 0 10px var(--neon-blue);
   letter-spacing: 2px;
   margin: 0;
+  font-size: 18px;
+  font-weight: 600;
 }
-.resource-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; }
-.resource-item { cursor: pointer; }
+.resource-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 15px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding-bottom: 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.resource-item {
+  cursor: pointer;
+}
+
 .resource-item.selected {
   background: rgba(0, 210, 255, 0.08);
   border-radius: 6px;
-  padding: 8px;
-  margin-left: -8px;
-  margin-right: -8px;
+  padding: 12px;
+  margin-left: -12px;
+  margin-right: -12px;
+  width: calc(100% + 24px);
 }
-.tag { background: #ff4d4f; color: white; padding: 2px 5px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
+
+.resource-item .info {
+  flex: 1;
+  margin-right: 20px;
+}
+
+.resource-item .btn-group {
+  white-space: nowrap;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.tag { background: var(--neon-red); color: white; padding: 2px 5px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
 .btn-group { display: flex; gap: 10px; }
-.btn-dispatch { background: linear-gradient(45deg, #ff4d4f, #ff7875); border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-.btn-dispatch:hover { transform: scale(1.05); }
-.btn-view { background: rgba(0, 210, 255, 0.2); border: 1px solid #00d2ff; color: white; padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: all 0.3s; }
-.btn-view:hover { background: rgba(0, 210, 255, 0.5); transform: scale(1.05); }
+.btn-dispatch { background: linear-gradient(45deg, var(--neon-red), #ff7875); border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif; text-transform: uppercase; letter-spacing: 1px; transition: all 0.3s; }
+.btn-dispatch:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(255, 77, 79, 0.5); }
+.btn-view { background: rgba(0, 210, 255, 0.2); border: 1px solid var(--neon-blue); color: var(--neon-blue); padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: all 0.3s; font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif; text-transform: uppercase; letter-spacing: 1px; }
+.btn-view:hover { background: rgba(0, 210, 255, 0.4); transform: scale(1.05); box-shadow: 0 0 10px rgba(0, 210, 255, 0.4); }
 
 .weather-controls {
   position: absolute;
@@ -169,20 +199,31 @@ onMounted(() => {
   z-index: 2000;
   display: flex;
   gap: 10px;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--bg-glass);
+  backdrop-filter: blur(10px);
   padding: 10px;
-  border-radius: 8px;
-  border: 1px solid #00d2ff;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 0 20px rgba(0, 210, 255, 0.1);
+  width: 450px;
+  justify-content: center;
+  box-sizing: border-box;
 }
 .weather-controls button {
   background: transparent;
-  border: none;
+  border: 1px solid var(--border-color);
   font-size: 20px;
   cursor: pointer;
-  transition: transform 0.2s;
+  transition: all 0.3s;
+  border-radius: 4px;
+  padding: 5px 10px;
+  color: var(--text-primary);
 }
 .weather-controls button:hover {
   transform: scale(1.2);
+  background: rgba(0, 210, 255, 0.2);
+  border-color: var(--neon-blue);
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.4);
 }
 </style>
 
@@ -193,24 +234,22 @@ onMounted(() => {
   left: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none; /* 让鼠标默认穿透 UI 层点击地图 */
+  pointer-events: none;
   padding: 20px;
   box-sizing: border-box;
   display: flex;
   justify-content: space-between;
 }
 
-/* 恢复面板内部的点击交互
-   注意：:deep() 仅在 <style scoped> 中生效；这里是全局样式，因此用普通选择器 */
 .ui-layer .sci-fi-panel {
   pointer-events: auto;
 }
 
 .left-panel {
-  width: 320px;
+  width: 450px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .bottom-panel {
@@ -218,6 +257,7 @@ onMounted(() => {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  width: 600px;
+  width: 800px;
+  max-width: 90vw;
 }
 </style>

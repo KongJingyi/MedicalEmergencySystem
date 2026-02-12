@@ -1,5 +1,5 @@
 <template>
-  <div ref="chartRef" style="width: 100%; height: 200px;"></div>
+  <div ref="chartRef" style="width: 100%; height: 100%; min-height: 350px;"></div>
 </template>
 
 <script setup>
@@ -9,6 +9,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 const props = defineProps({ data: Object }) // 接收父组件传来的物资数据
 const chartRef = ref(null)
 let myChart = null
+let updateInterval = null
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
 
@@ -82,6 +83,28 @@ const initChart = () => {
   updateOption()
 }
 
+const animateChart = () => {
+  if (!myChart) return
+
+  const baseValues = toRadarValues(props.data)
+  const animatedValues = baseValues.map(val => {
+    const variation = Math.random() * 10 - 5
+    return clamp(val + variation, 0, val > 10 ? 100 : 10)
+  })
+
+  myChart.setOption({
+    series: [
+      {
+        data: [
+          {
+            value: animatedValues,
+          },
+        ],
+      },
+    ],
+  })
+}
+
 const handleResize = () => {
   if (myChart) myChart.resize()
 }
@@ -89,10 +112,12 @@ const handleResize = () => {
 onMounted(() => {
   initChart()
   window.addEventListener('resize', handleResize)
+  updateInterval = setInterval(animateChart, 500)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  if (updateInterval) clearInterval(updateInterval)
   if (myChart) {
     myChart.dispose()
     myChart = null

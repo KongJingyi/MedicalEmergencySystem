@@ -1,35 +1,56 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import * as echarts from 'echarts'
+import PanelBox from './ui/PanelBox.vue'
 
-const props = defineProps(['hospitalPressure']) // 接收父组件传来的“压力值”
+const props = defineProps(['hospitalPressure'])
 
-// 定义图表容器的引用
 const chartTempRef = ref(null)
 const chartStockRef = ref(null)
+const chartGaugeRef = ref(null)
 
-// 1. 初始化左侧：冷链温度监控 (模拟实时跳动)
+let tempChart = null
+let stockChart = null
+let gaugeChart = null
+let updateInterval = null
+
+const tempData = ref([-70, -71, -69, -70, -72])
+const stockData = ref([20, 50, 90, 80])
+const icuOccupancy = ref(92)
+const bloodStock = ref(75)
+
 const initTempChart = () => {
-  const myChart = echarts.init(chartTempRef.value)
+  tempChart = echarts.init(chartTempRef.value)
   const option = {
     title: { text: '冷链箱实时温控', textStyle: { color: '#fff', fontSize: 14 } },
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      formatter: function(params) {
+        let result = params[0].name + '<br/>';
+        params.forEach(item => {
+          result += item.marker + item.seriesName + ': ' + item.value.toFixed(2) + '℃<br/>';
+        });
+        return result;
+      }
+    },
     xAxis: { type: 'category', data: ['10:00', '10:05', '10:10', '10:15', '10:20'], axisLabel: { color: '#fff' } },
     yAxis: { type: 'value', min: -80, max: 10, axisLabel: { color: '#fff' }, splitLine: { show: false } },
     series: [{
-      data: [-70, -71, -69, -70, -72], // 模拟辉瑞疫苗温度
+      data: tempData.value,
       type: 'line',
       smooth: true,
       lineStyle: { color: '#00d2ff' },
-      areaStyle: { color: 'rgba(0, 210, 255, 0.3)' }
+      areaStyle: { color: 'rgba(0, 210, 255, 0.3)' },
+      symbol: 'circle',
+      symbolSize: 6,
+      itemStyle: { color: '#00d2ff' }
     }]
   }
-  myChart.setOption(option)
+  tempChart.setOption(option)
 }
 
-// 2. 初始化右侧：医院承载力/库存 (核心医疗数据)
 const initStockChart = () => {
-  const myChart = echarts.init(chartStockRef.value)
+  stockChart = echarts.init(chartStockRef.value)
   const option = {
     title: { text: '目标医院物资缺口', textStyle: { color: '#fff', fontSize: 14 } },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
@@ -43,70 +64,206 @@ const initStockChart = () => {
       {
         name: '当前缺口',
         type: 'bar',
-        data: [20, 50, 90, 80], // 红色代表缺口大
+        data: stockData.value,
         itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#ff4d4f' }, { offset: 1, color: '#ff7875' }]) },
-        label: { show: true, position: 'right', color: '#fff' }
+        label: { show: true, position: 'right', color: '#fff', formatter: (params) => params.value.toFixed(2) }
       }
     ]
   }
-  myChart.setOption(option)
-  return myChart
+  stockChart.setOption(option)
+  return stockChart
+}
+
+const initGaugeChart = () => {
+  gaugeChart = echarts.init(chartGaugeRef.value)
+  const option = {
+    series: [
+      {
+        type: 'gauge',
+        startAngle: 180,
+        endAngle: 0,
+        min: 0,
+        max: 100,
+        splitNumber: 10,
+        radius: '90%',
+        center: ['50%', '70%'],
+        itemStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+            { offset: 0, color: '#00d2ff' },
+            { offset: 0.5, color: '#00ff88' },
+            { offset: 1, color: '#ff4d4f' }
+          ])
+        },
+        progress: {
+          show: true,
+          roundCap: true,
+          width: 12
+        },
+        pointer: {
+          show: false
+        },
+        axisLine: {
+          roundCap: true,
+          lineStyle: {
+            width: 12,
+            color: [[1, 'rgba(255, 255, 255, 0.1)']]
+          }
+        },
+        axisTick: {
+          show: false
+        },
+        splitLine: {
+          show: false
+        },
+        axisLabel: {
+          show: false
+        },
+        title: {
+          show: true,
+          offsetCenter: [0, '30%'],
+          color: '#fff',
+          fontSize: 14,
+          fontFamily: 'Orbitron, Roboto Mono, monospace'
+        },
+        detail: {
+          valueAnimation: true,
+          fontSize: 24,
+          offsetCenter: [0, '0%'],
+          color: '#fff',
+          fontFamily: 'Orbitron, Roboto Mono, monospace',
+          formatter: (value) => value.toFixed(2) + '%'
+        },
+        data: [
+          {
+            value: icuOccupancy.value,
+            name: 'ICU占用率'
+          }
+        ]
+      }
+    ]
+  }
+  gaugeChart.setOption(option)
+}
+
+const updateCharts = () => {
+  const timeLabels = ['10:00', '10:05', '10:10', '10:15', '10:20']
+  const newTime = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  
+  tempData.value.shift()
+  tempData.value.push(-70 + Math.random() * 4 - 2)
+  
+  timeLabels.shift()
+  timeLabels.push(newTime)
+  
+  tempChart.setOption({
+    xAxis: { data: timeLabels },
+    series: [{ data: tempData.value }]
+  })
+  
+  stockData.value = stockData.value.map(val => Math.max(0, val + Math.random() * 4 - 2))
+  stockChart.setOption({
+    series: [{ data: stockData.value }]
+  })
+  
+  icuOccupancy.value = Math.max(0, Math.min(100, icuOccupancy.value + Math.random() * 2 - 1))
+  gaugeChart.setOption({
+    series: [{ data: [{ value: icuOccupancy.value, name: 'ICU占用率' }] }]
+  })
+}
+
+const handleResize = () => {
+  if (tempChart) tempChart.resize()
+  if (stockChart) stockChart.resize()
+  if (gaugeChart) gaugeChart.resize()
 }
 
 onMounted(() => {
   initTempChart()
-  const stockChart = initStockChart()
-
-  // 监听父组件传来的压力变化，动态更新图表
-  // 当无人机送达时，缺口会减少！
+  initStockChart()
+  initGaugeChart()
+  
+  window.addEventListener('resize', handleResize)
+  
+  updateInterval = setInterval(updateCharts, 1000)
+  
   watch(() => props.hospitalPressure, (newVal) => {
-    // 模拟数据更新：O型血缺口从 90 降到 (90 - 减少的值)
+    stockData.value[2] = Math.max(0, 90 - newVal)
     stockChart.setOption({
-      series: [{ data: [20, 50, Math.max(0, 90 - newVal), 80] }]
+      series: [{ data: stockData.value }]
     })
   })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  if (updateInterval) clearInterval(updateInterval)
+  if (tempChart) tempChart.dispose()
+  if (stockChart) stockChart.dispose()
+  if (gaugeChart) gaugeChart.dispose()
 })
 </script>
 
 <template>
-  <div class="panel left-panel">
+  <PanelBox title="冷链监控" class="left-panel">
     <div ref="chartTempRef" class="chart-box"></div>
-  </div>
+  </PanelBox>
 
-  <div class="panel right-panel">
+  <PanelBox title="医院物资状态" class="right-panel">
     <div ref="chartStockRef" class="chart-box"></div>
     <div class="status-box">
       <h4>🏥 积水潭医院状态</h4>
-      <p>急救响应等级: <span style="color:red">Level 1</span></p>
-      <p>ICU 占用率: <span style="color:orange">92%</span></p>
-      <p>预计送达时间: <span style="color:#00d2ff">3分20秒</span></p>
+      <p>急救响应等级: <span style="color:var(--neon-red)">Level 1</span></p>
+      <p>血库余量: <span :style="{ color: bloodStock > 50 ? '#00d2ff' : '#ff4d4f' }">{{ bloodStock.toFixed(1) }}%</span></p>
+      <p>预计送达时间: <span style="color:var(--neon-blue)">3分20秒</span></p>
     </div>
-  </div>
+    <div ref="chartGaugeRef" class="gauge-box"></div>
+  </PanelBox>
 </template>
 
 <style scoped>
-.panel {
+.left-panel {
   position: absolute;
-  top: 80px; /* 留出顶部标题栏空间 */
-  width: 300px;
-  background: rgba(11, 17, 32, 0.85); /* 深色半透明 */
-  border: 1px solid rgba(0, 210, 255, 0.3);
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
-  border-radius: 8px;
-  padding: 15px;
-  z-index: 998; /* 在地图之上 */
+  left: 20px;
+  bottom: 20px;
+  width: 450px;
+  z-index: 998;
 }
-.left-panel { left: 20px; bottom: 20px; top: auto; } /* 左下角 */
-.right-panel { right: 20px; } /* 右上角 */
+
+.right-panel {
+  position: absolute;
+  right: 20px;
+  top: 80px;
+  width: 450px;
+  z-index: 998;
+}
 
 .chart-box {
   width: 100%;
-  height: 200px;
+  height: 250px;
 }
+
+.gauge-box {
+  width: 100%;
+  height: 180px;
+  margin-top: 15px;
+}
+
 .status-box {
   margin-top: 15px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding-top: 10px;
   color: white;
+}
+
+.status-box h4 {
+  margin: 0 0 10px 0;
+  color: var(--neon-blue);
+  font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif;
+  font-size: 14px;
+}
+
+.status-box p {
+  margin: 5px 0;
+  font-size: 13px;
 }
 </style>
