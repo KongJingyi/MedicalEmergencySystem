@@ -5,12 +5,17 @@ import Dashboard from './components/Dashboard.vue'
 import DroneCam from './components/DroneCam.vue'
 import PanelBox from './components/ui/PanelBox.vue'
 import ResourceRadar from './components/charts/ResourceRadar.vue'
-import SystemLog from './components/ui/SystemLog.vue'
 import LoadingScreen from './components/ui/LoadingScreen.vue'
+import FleetList from './components/FleetList.vue'
+import ViewSwitch from './components/ViewSwitch.vue'
+import HUDOverlay from './components/HUDOverlay.vue'
+import AlarmModal from './components/AlarmModal.vue'
+import BottomPanel from './components/BottomPanel.vue'
 
 // 引入Cesium地图和无人机相关的hook
 import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
+import { useAudio } from './hooks/useAudio'
 
 // 资源列表数据（后端接口获取）
 const resources = ref([])
@@ -18,6 +23,13 @@ const resources = ref([])
 const hospitalPressure = ref(0)
 const selectedResource = ref(null)
 const logRef = ref(null)
+const bottomPanelRef = ref(null)
+const viewMode = ref('2d')
+const alarmVisible = ref(false)
+const alarmMessage = ref('')
+const alarmType = ref('')
+const alarmBatteryLevel = ref(null)
+const alarmTimestamp = ref('')
 
 // 解构Cesium地图Hook的方法和响应式对象
 const { viewerRef, initMap } = useCesiumMap()
@@ -32,9 +44,13 @@ const {
   changeWeather,
 } = useDrone(viewerRef, hospitalPressure)
 
+// 解构音频Hook的方法
+const { playClick, playRadar, playWarning, stopWarning } = useAudio()
+
 // 包一层，增加系统日志
 const dispatch = async (resource) => {
-  logRef.value?.addLog('info', `调度指令下达: ${resource.name}`)
+  playClick()
+  bottomPanelRef.value?.logRef?.addLog('info', `调度指令下达: ${resource.name}`)
   await droneDispatch(resource)
 }
 
@@ -42,6 +58,7 @@ const dispatch = async (resource) => {
 const fetchResources = async () => {
   try {
     const res = await axios.get('http://127.0.0.1:8000/api/resources')
+    playRadar()
     resources.value = res.data
     if (!selectedResource.value && resources.value && resources.value.length > 0) {
       selectedResource.value = resources.value[0]
@@ -51,8 +68,59 @@ const fetchResources = async () => {
   }
 }
 
+// 触发报警
+const triggerAlarm = (message, type, batteryLevel = null) => {
+  alarmMessage.value = message
+  alarmType.value = type
+  alarmBatteryLevel.value = batteryLevel
+  alarmTimestamp.value = new Date().toLocaleTimeString('zh-CN', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+  alarmVisible.value = true
+  playWarning()
+  bottomPanelRef.value?.logRef?.addLog('warn', `警报触发: ${message}`)
+}
+
+// 确认报警
+const confirmAlarm = () => {
+  stopWarning()
+  alarmVisible.value = false
+  bottomPanelRef.value?.logRef?.addLog('info', '警报已确认')
+}
+
+// 忽略报警
+const dismissAlarm = () => {
+  stopWarning()
+  alarmVisible.value = false
+  bottomPanelRef.value?.logRef?.addLog('warn', '警报已忽略')
+}
+
 const selectResource = (item) => {
+  playClick()
   selectedResource.value = item
+}
+
+const selectFleet = (item) => {
+  playClick()
+  bottomPanelRef.value?.logRef?.addLog('info', `选中机队: ${item.id} (${item.type})`)
+  if (item.position && viewerRef.value) {
+    viewerRef.value.camera.flyTo({
+      destination: {
+        longitude: item.position.lon,
+        latitude: item.position.lat,
+        height: 500
+      },
+      duration: 2
+    })
+  }
+}
+
+const handleViewChange = (mode) => {
+  viewMode.value = mode
+  bottomPanelRef.value?.logRef?.addLog('info', `切换视图模式: ${mode === '2d' ? '全局视图' : '驾驶舱视图'}`)
 }
 
 onMounted(() => {
@@ -81,48 +149,57 @@ onMounted(() => {
   />
 
   <div class="weather-controls">
-    <button @click="changeWeather('sunny')" title="晴天">☀️</button>
-    <button @click="changeWeather('rain')" title="下雨">🌧️</button>
-    <button @click="changeWeather('snow')" title="下雪">❄️</button>
-    <button @click="changeWeather('fog')" title="大雾">🌫️</button>
+    <button @click="playClick(); changeWeather('sunny')" title="晴天">☀️</button>
+    <button @click="playClick(); changeWeather('rain')" title="下雨">🌧️</button>
+    <button @click="playClick(); changeWeather('snow')" title="下雪">❄️</button>
+    <button @click="playClick(); changeWeather('fog')" title="大雾">🌫️</button>
   </div>
+
+  <ViewSwitch @change="handleViewChange" />
+
+  <HUDOverlay :visible="viewMode === '3d' && showCamera" />
+
+  <AlarmModal 
+    :visible="alarmVisible"
+    :message="alarmMessage"
+    :type="alarmType"
+    :batteryLevel="alarmBatteryLevel"
+    :timestamp="alarmTimestamp"
+    @confirm="confirmAlarm"
+    @dismiss="dismissAlarm"
+  />
 
   <div class="ui-layer">
     <div class="left-panel">
-      <PanelBox title="物资列表">
-        <ul style="padding: 0; margin: 0; list-style: none;">
-          <li
-            v-for="item in resources"
+      <PanelBox title="医疗资源应急调度台">
+        <div v-if="resources.length === 0" class="loading-text">加载中...</div>
+        <div v-else>
+          <div 
+            v-for="item in resources" 
             :key="item.id"
             class="resource-item"
             :class="{ selected: selectedResource && selectedResource.id === item.id }"
             @click="selectResource(item)"
           >
             <div class="info">
-              <b>{{ item.name }}</b>
-              <span class="tag" v-if="item.urgency_level >= 4">紧急调配</span>
-              <br />
-              <small>适宜储存温度: {{ item.min_temp }}~{{ item.max_temp }}℃</small>
+              <div class="name">{{ item.name }}</div>
+              <div class="details">
+                <span class="detail">库存: {{ item.stock }}</span>
+                <span class="detail">优先级: {{ item.priority }}</span>
+              </div>
             </div>
             <div class="btn-group">
-              <button @click.stop="dispatch(item)" class="btn-dispatch">调度无人机</button>
-              <button @click.stop="viewVehicle(item.id)" class="btn-view" title="第一视角">👁️</button>
+              <button @click.stop="dispatch(item)" class="dispatch-btn">调度</button>
             </div>
-          </li>
-        </ul>
-      </PanelBox>
-
-      <PanelBox title="物资属性分析" style="height: 380px;">
-        <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
-          <ResourceRadar :data="selectedResource" />
+          </div>
         </div>
       </PanelBox>
+      
+      <FleetList @select="selectFleet" />
     </div>
 
     <div class="bottom-panel">
-      <PanelBox title="系统日志">
-        <SystemLog ref="logRef" />
-      </PanelBox>
+      <BottomPanel ref="bottomPanelRef" />
     </div>
   </div>
 </template>
@@ -150,6 +227,14 @@ onMounted(() => {
   font-size: 18px;
   font-weight: 600;
 }
+
+.loading-text {
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+  padding: 20px;
+  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+}
+
 .resource-item {
   display: flex;
   justify-content: space-between;
@@ -179,18 +264,50 @@ onMounted(() => {
   margin-right: 20px;
 }
 
+.resource-item .name {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+}
+
+.resource-item .details {
+  display: flex;
+  gap: 15px;
+}
+
+.resource-item .detail {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+}
+
 .resource-item .btn-group {
   white-space: nowrap;
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
-.tag { background: var(--neon-red); color: white; padding: 2px 5px; border-radius: 4px; font-size: 12px; margin-left: 5px; }
-.btn-group { display: flex; gap: 10px; }
-.btn-dispatch { background: linear-gradient(45deg, var(--neon-red), #ff7875); border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif; text-transform: uppercase; letter-spacing: 1px; transition: all 0.3s; }
-.btn-dispatch:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(255, 77, 79, 0.5); }
-.btn-view { background: rgba(0, 210, 255, 0.2); border: 1px solid var(--neon-blue); color: var(--neon-blue); padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: all 0.3s; font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif; text-transform: uppercase; letter-spacing: 1px; }
-.btn-view:hover { background: rgba(0, 210, 255, 0.4); transform: scale(1.05); box-shadow: 0 0 10px rgba(0, 210, 255, 0.4); }
+
+.resource-item .dispatch-btn {
+  background: linear-gradient(45deg, var(--neon-red), #ff7875);
+  border: none;
+  color: white;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  transition: all 0.3s;
+}
+
+.resource-item .dispatch-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 15px rgba(255, 77, 79, 0.5);
+}
 
 .weather-controls {
   position: absolute;
@@ -205,7 +322,7 @@ onMounted(() => {
   border-radius: 4px;
   border: 1px solid var(--border-color);
   box-shadow: 0 0 20px rgba(0, 210, 255, 0.1);
-  width: 450px;
+  width: 480px;
   justify-content: center;
   box-sizing: border-box;
 }
@@ -257,7 +374,7 @@ onMounted(() => {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  width: 800px;
+  width: 900px;
   max-width: 90vw;
 }
 </style>

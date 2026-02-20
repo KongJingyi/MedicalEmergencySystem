@@ -2,11 +2,15 @@
 import { onMounted, onBeforeUnmount, ref, toRaw } from 'vue'
 import * as Cesium from 'cesium'
 import PanelBox from './ui/PanelBox.vue'
+import { useAudio } from '../hooks/useAudio'
 
 const props = defineProps({
   mainViewer: Object,
   vehicle: Object
 })
+
+const emit = defineEmits(['close'])
+const { playClick } = useAudio()
 
 const miniContainer = ref(null)
 let miniViewer = null
@@ -90,7 +94,7 @@ onBeforeUnmount(() => {
     <template #header-extra>
       <span class="rec-dot">●</span>
       <span class="rec-text">REC</span>
-      <span class="close-btn" @click="$emit('close')">✖</span>
+      <span class="close-btn" @click="playClick(); $emit('close')">✖</span>
     </template>
     
     <div ref="miniContainer" class="mini-cesium"></div>
@@ -109,8 +113,8 @@ onBeforeUnmount(() => {
   position: absolute;
   bottom: 20px;
   right: 20px;
-  width: 380px;
-  height: 200px;
+  width: 450px;
+  height: 230px;
   z-index: 1000;
 }
 
@@ -141,7 +145,7 @@ onBeforeUnmount(() => {
 
 .mini-cesium {
   width: 100%;
-  height: 150px;
+  height: 180px;
   border-radius: 4px;
   overflow: hidden;
 }

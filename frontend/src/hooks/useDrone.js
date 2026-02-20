@@ -120,9 +120,9 @@ export function useDrone(viewerRef, hospitalPressure) {
     // 将新载体加入机队统一管理
     droneFleet.set(id, newVehicle);
 
-    // 【原代码注释保留】关联第一视角（当前注释掉，可根据业务开启）
-    // activeDroneEntity.value = markRaw(newVehicle.entity);
-    // showCamera.value = true;
+    // 关联第一视角，自动打开无人机视角
+    activeDroneEntity.value = markRaw(newVehicle.entity);
+    showCamera.value = true;
   }
 
   // 根据资源ID，查找对应配送载体并打开第一视角

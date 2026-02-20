@@ -5,49 +5,16 @@ import PanelBox from './ui/PanelBox.vue'
 
 const props = defineProps(['hospitalPressure'])
 
-const chartTempRef = ref(null)
 const chartStockRef = ref(null)
 const chartGaugeRef = ref(null)
 
-let tempChart = null
 let stockChart = null
 let gaugeChart = null
 let updateInterval = null
 
-const tempData = ref([-70, -71, -69, -70, -72])
 const stockData = ref([20, 50, 90, 80])
 const icuOccupancy = ref(92)
 const bloodStock = ref(75)
-
-const initTempChart = () => {
-  tempChart = echarts.init(chartTempRef.value)
-  const option = {
-    title: { text: '冷链箱实时温控', textStyle: { color: '#fff', fontSize: 14 } },
-    tooltip: {
-      trigger: 'axis',
-      formatter: function(params) {
-        let result = params[0].name + '<br/>';
-        params.forEach(item => {
-          result += item.marker + item.seriesName + ': ' + item.value.toFixed(2) + '℃<br/>';
-        });
-        return result;
-      }
-    },
-    xAxis: { type: 'category', data: ['10:00', '10:05', '10:10', '10:15', '10:20'], axisLabel: { color: '#fff' } },
-    yAxis: { type: 'value', min: -80, max: 10, axisLabel: { color: '#fff' }, splitLine: { show: false } },
-    series: [{
-      data: tempData.value,
-      type: 'line',
-      smooth: true,
-      lineStyle: { color: '#00d2ff' },
-      areaStyle: { color: 'rgba(0, 210, 255, 0.3)' },
-      symbol: 'circle',
-      symbolSize: 6,
-      itemStyle: { color: '#00d2ff' }
-    }]
-  }
-  tempChart.setOption(option)
-}
 
 const initStockChart = () => {
   stockChart = echarts.init(chartStockRef.value)
@@ -146,20 +113,6 @@ const initGaugeChart = () => {
 }
 
 const updateCharts = () => {
-  const timeLabels = ['10:00', '10:05', '10:10', '10:15', '10:20']
-  const newTime = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  
-  tempData.value.shift()
-  tempData.value.push(-70 + Math.random() * 4 - 2)
-  
-  timeLabels.shift()
-  timeLabels.push(newTime)
-  
-  tempChart.setOption({
-    xAxis: { data: timeLabels },
-    series: [{ data: tempData.value }]
-  })
-  
   stockData.value = stockData.value.map(val => Math.max(0, val + Math.random() * 4 - 2))
   stockChart.setOption({
     series: [{ data: stockData.value }]
@@ -172,13 +125,11 @@ const updateCharts = () => {
 }
 
 const handleResize = () => {
-  if (tempChart) tempChart.resize()
   if (stockChart) stockChart.resize()
   if (gaugeChart) gaugeChart.resize()
 }
 
 onMounted(() => {
-  initTempChart()
   initStockChart()
   initGaugeChart()
   
@@ -197,17 +148,12 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
   if (updateInterval) clearInterval(updateInterval)
-  if (tempChart) tempChart.dispose()
   if (stockChart) stockChart.dispose()
   if (gaugeChart) gaugeChart.dispose()
 })
 </script>
 
 <template>
-  <PanelBox title="冷链监控" class="left-panel">
-    <div ref="chartTempRef" class="chart-box"></div>
-  </PanelBox>
-
   <PanelBox title="医院物资状态" class="right-panel">
     <div ref="chartStockRef" class="chart-box"></div>
     <div class="status-box">
@@ -221,18 +167,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.left-panel {
-  position: absolute;
-  left: 20px;
-  bottom: 20px;
-  width: 450px;
-  z-index: 998;
-}
-
 .right-panel {
   position: absolute;
   right: 20px;
-  top: 80px;
+  top: 220px;
   width: 450px;
   z-index: 998;
 }
