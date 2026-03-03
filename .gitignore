@@ -1,0 +1,21 @@
+# Large datasets / archives (do not push to GitHub)
+frontend/public/Beijing3D/
+1/
+*.zip
+
+# Dependencies / build outputs
+frontend/node_modules/
+frontend/dist/
+backend/venv/
+backend/__pycache__/
+
+# Large datasets / archives (don't push to GitHub)
+frontend/public/Beijing3D/
+1/
+*.zip
+
+# Dependencies / build outputs
+frontend/node_modules/
+frontend/dist/
+backend/venv/
+backend/__pycache__/
