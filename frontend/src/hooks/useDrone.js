@@ -73,11 +73,15 @@ export function useDrone(viewerRef, hospitalPressure) {
         for (const [lng, lat] of wgs84Path) {
           flat.push(lng, lat, 0)
         }
+        // 使用同样的流光材质绘制一条“规划路径”光带，便于调试观察
         viewer.entities.add({
           polyline: {
             positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat),
-            width: 2,
-            material: Cesium.Color.LIME.withAlpha(0.8),
+            width: 3,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.2,
+              color: Cesium.Color.LIME.withAlpha(0.8),
+            }),
             clampToGround: true,
           },
         })

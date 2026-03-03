@@ -1,6 +1,10 @@
 // src/classes/Drone.js
 import * as Cesium from 'cesium'
 import { VEHICLE_TYPES } from '../config/VehicleConfig' // 引入配置
+import { PolylineTrailLinkMaterialProperty } from './PolylineTrailLinkMaterialProperty'
+
+// LOD 阈值（米）：相机距离实体中心超过此距离时，用 Billboard 代替 3D 模型
+const LOD_DISTANCE = 5000.0;
 
 export class Drone {
   /**
@@ -16,6 +20,10 @@ export class Drone {
     this.onArrivedCallback = null; // 到达后的回调
     this._onStopListener = null; // 保存监听器引用，方便清理
     this.typeConfig = null; // 存储当前是哪种载具
+
+    // 粒子尾焰相关
+    this._thrusterSystems = []; // 保存两个尾焰粒子系统
+    this._preUpdateCallback = null; // 每帧更新尾焰位置的回调
   }
 
   /**
@@ -41,7 +49,7 @@ export class Drone {
       this.typeConfig.fixHeading
     )
 
-    // 4. 创建实体
+    // 4. 创建实体（包含 LOD：近距离用 3D 模型，远距离用 Billboard 图标）
     this.entity = this.viewer.entities.add({
       id: this.id,
       availability: new Cesium.TimeIntervalCollection([
@@ -49,23 +57,51 @@ export class Drone {
       ]),
       position: waypoints,
       orientation: orientationProperty,
+
+      // 近距离：精细 3D 模型
       model: {
         uri: this.typeConfig.modelUri,
         minimumPixelSize: this.typeConfig.minimumPixelSize,
         scale: this.typeConfig.scale,
         runAnimations: true,
+        // 当相机距离 < LOD_DISTANCE 时显示模型
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(
+          0.0,
+          LOD_DISTANCE
+        ),
       },
+
+      // 远距离：简单 Billboard 图标
+      billboard: {
+        image: type === 'DRONE' ? '/images/drone-icon.png' : '/images/ambulance-icon.png',
+        scale: 0.9,
+        // 当相机距离 >= LOD_DISTANCE 时显示图标
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(
+          LOD_DISTANCE,
+          Number.MAX_VALUE
+        ),
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -10),
+      },
+
+      // 轨迹线：升级为“流光材质”，看起来像有光子在路径上流动
       path: {
         resolution: 1,
-        material: new Cesium.PolylineGlowMaterialProperty({
-          glowPower: 0.2,
-          color: this.typeConfig.pathColor,
-        }),
+        material: new PolylineTrailLinkMaterialProperty(
+          this.typeConfig.pathColor.withAlpha(0.9),
+          0.03,  // speed：流光速度
+          1.2    // gradient：光带强度
+        ),
         width: 6,
       },
     })
 
-    // 5. 监听到达
+    // 5. 为无人机添加蓝色离子尾焰粒子系统
+    if (type === 'DRONE') {
+      this._createThrusterParticles()
+    }
+
+    // 6. 监听到达
     this._listenArrival(stop)
   }
 
@@ -82,6 +118,21 @@ export class Drone {
       this.viewer.clock.onStop.removeEventListener(this._onStopListener);
       this._onStopListener = null;
     }
+
+    // 移除尾焰粒子系统
+    if (this._thrusterSystems && this._thrusterSystems.length > 0) {
+      this._thrusterSystems.forEach(item => {
+        this.viewer.scene.primitives.remove(item.system)
+      })
+      this._thrusterSystems = []
+    }
+
+    // 移除每帧更新回调
+    if (this._preUpdateCallback) {
+      this.viewer.scene.preUpdate.removeEventListener(this._preUpdateCallback)
+      this._preUpdateCallback = null
+    }
+
     this.status = 'IDLE';
   }
 
@@ -208,5 +259,73 @@ export class Drone {
       }
     };
     this.viewer.clock.onStop.addEventListener(this._onStopListener);
+  }
+
+  // 创建两条蓝色离子尾焰（粒子系统），并在每帧更新它们的位置/方向
+  _createThrusterParticles() {
+    const scene = this.viewer.scene
+    // 使用项目自带的贴图资源，避免依赖 Cesium 内置粒子纹理路径
+    const tailImage = '/images/drone-icon.png'
+
+    // 在机体坐标系下的两个喷口偏移（单位：米）
+    const offsets = [
+      new Cesium.Cartesian3(-2.0, 0.6, 0.0),  // 左喷口
+      new Cesium.Cartesian3(-2.0, -0.6, 0.0), // 右喷口
+    ]
+
+    this._thrusterSystems = offsets.map(offset => {
+      const system = new Cesium.ParticleSystem({
+        image: tailImage,
+        startColor: new Cesium.Color(0.2, 0.8, 1.0, 0.9),   // 蓝色离子光
+        endColor: new Cesium.Color(0.0, 0.2, 0.8, 0.0),
+        startScale: 0.5,
+        endScale: 0.0,
+        minimumParticleLife: 0.2,
+        maximumParticleLife: 0.6,
+        minimumSpeed: 8.0,
+        maximumSpeed: 16.0,
+        emissionRate: 40.0,
+        lifetime: Number.MAX_VALUE,
+        emitter: new Cesium.ConeEmitter(Cesium.Math.toRadians(15.0)),
+        // modelMatrix 和 emitterModelMatrix 会在 preUpdate 中实时更新
+        modelMatrix: Cesium.Matrix4.IDENTITY,
+        emitterModelMatrix: Cesium.Matrix4.IDENTITY,
+      })
+
+      scene.primitives.add(system)
+      return { system, offset }
+    })
+
+    // 每帧将粒子系统绑到无人机当前姿态，并把喷口平移到机尾
+    this._preUpdateCallback = (scene, time) => {
+      // 实体不存在或粒子系统已被清理时，直接跳过
+      if (!this.entity || !this._thrusterSystems || this._thrusterSystems.length === 0) {
+        return
+      }
+
+      const modelMatrix = this.entity.computeModelMatrix(
+        time,
+        new Cesium.Matrix4()
+      )
+
+      // 在部分时间点（比如任务结束后），computeModelMatrix 可能返回 undefined
+      if (!Cesium.defined(modelMatrix)) {
+        return
+      }
+
+      this._thrusterSystems.forEach(item => {
+        if (!item.system || (typeof item.system.isDestroyed === 'function' && item.system.isDestroyed())) {
+          return
+        }
+        const emitterMatrix = Cesium.Matrix4.fromTranslation(
+          item.offset,
+          new Cesium.Matrix4()
+        )
+        item.system.modelMatrix = modelMatrix
+        item.system.emitterModelMatrix = emitterMatrix
+      })
+    }
+
+    scene.preUpdate.addEventListener(this._preUpdateCallback)
   }
 }
