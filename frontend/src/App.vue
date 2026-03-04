@@ -30,6 +30,8 @@ const alarmMessage = ref('')
 const alarmType = ref('')
 const alarmBatteryLevel = ref(null)
 const alarmTimestamp = ref('')
+// 是否显示所有 UI 控制面板
+const showPanels = ref(true)
 
 // 解构Cesium地图Hook的方法和响应式对象
 const { viewerRef, initMap } = useCesiumMap()
@@ -123,6 +125,10 @@ const handleViewChange = (mode) => {
   bottomPanelRef.value?.logRef?.addLog('info', `切换视图模式: ${mode === '2d' ? '全局视图' : '驾驶舱视图'}`)
 }
 
+const togglePanels = () => {
+  showPanels.value = !showPanels.value
+}
+
 onMounted(() => {
   // 初始化Cesium地图容器
   initMap('cesiumContainer')
@@ -139,67 +145,75 @@ onMounted(() => {
     <h2>无人机调度监控系统 - 医院资源调配可视化平台</h2>
   </div>
 
-  <Dashboard :hospitalPressure="hospitalPressure" />
+  <!-- 面板总开关按钮（始终可见） -->
+  <button class="ui-toggle-btn" @click="togglePanels">
+    {{ showPanels ? '隐藏面板' : '显示面板' }}
+  </button>
 
-  <DroneCam 
-    v-if="showCamera && activeDroneEntity && viewerRef" 
-    :mainViewer="viewerRef" 
-    :vehicle="activeDroneEntity" 
-    @close="closeCamera"
-  />
+  <!-- 所有 UI 控制面板：可整体显示 / 隐藏 -->
+  <div v-if="showPanels">
+    <Dashboard :hospitalPressure="hospitalPressure" />
 
-  <div class="weather-controls">
-    <button @click="playClick(); changeWeather('sunny')" title="晴天">☀️</button>
-    <button @click="playClick(); changeWeather('rain')" title="下雨">🌧️</button>
-    <button @click="playClick(); changeWeather('snow')" title="下雪">❄️</button>
-    <button @click="playClick(); changeWeather('fog')" title="大雾">🌫️</button>
-  </div>
+    <DroneCam 
+      v-if="showCamera && activeDroneEntity && viewerRef" 
+      :mainViewer="viewerRef" 
+      :vehicle="activeDroneEntity" 
+      @close="closeCamera"
+    />
 
-  <ViewSwitch @change="handleViewChange" />
-
-  <HUDOverlay :visible="viewMode === '3d' && showCamera" />
-
-  <AlarmModal 
-    :visible="alarmVisible"
-    :message="alarmMessage"
-    :type="alarmType"
-    :batteryLevel="alarmBatteryLevel"
-    :timestamp="alarmTimestamp"
-    @confirm="confirmAlarm"
-    @dismiss="dismissAlarm"
-  />
-
-  <div class="ui-layer">
-    <div class="left-panel">
-      <PanelBox title="医疗资源应急调度台">
-        <div v-if="resources.length === 0" class="loading-text">加载中...</div>
-        <div v-else>
-          <div 
-            v-for="item in resources" 
-            :key="item.id"
-            class="resource-item"
-            :class="{ selected: selectedResource && selectedResource.id === item.id }"
-            @click="selectResource(item)"
-          >
-            <div class="info">
-              <div class="name">{{ item.name }}</div>
-              <div class="details">
-                <span class="detail">库存: {{ item.stock }}</span>
-                <span class="detail">优先级: {{ item.priority }}</span>
-              </div>
-            </div>
-            <div class="btn-group">
-              <button @click.stop="dispatch(item)" class="dispatch-btn">调度</button>
-            </div>
-          </div>
-        </div>
-      </PanelBox>
-      
-      <FleetList @select="selectFleet" />
+    <div class="weather-controls">
+      <button @click="playClick(); changeWeather('sunny')" title="晴天">☀️</button>
+      <button @click="playClick(); changeWeather('rain')" title="下雨">🌧️</button>
+      <button @click="playClick(); changeWeather('snow')" title="下雪">❄️</button>
+      <button @click="playClick(); changeWeather('fog')" title="大雾">🌫️</button>
     </div>
 
-    <div class="bottom-panel">
-      <BottomPanel ref="bottomPanelRef" />
+    <ViewSwitch @change="handleViewChange" />
+
+    <HUDOverlay :visible="viewMode === '3d' && showCamera" />
+
+    <AlarmModal 
+      :visible="alarmVisible"
+      :message="alarmMessage"
+      :type="alarmType"
+      :batteryLevel="alarmBatteryLevel"
+      :timestamp="alarmTimestamp"
+      @confirm="confirmAlarm"
+      @dismiss="dismissAlarm"
+    />
+
+    <div class="ui-layer">
+      <div class="left-panel">
+        <PanelBox title="医疗资源应急调度台">
+          <div v-if="resources.length === 0" class="loading-text">加载中...</div>
+          <div v-else>
+            <div 
+              v-for="item in resources" 
+              :key="item.id"
+              class="resource-item"
+              :class="{ selected: selectedResource && selectedResource.id === item.id }"
+              @click="selectResource(item)"
+            >
+              <div class="info">
+                <div class="name">{{ item.name }}</div>
+                <div class="details">
+                  <span class="detail">库存: {{ item.stock }}</span>
+                  <span class="detail">优先级: {{ item.priority }}</span>
+                </div>
+              </div>
+              <div class="btn-group">
+                <button @click.stop="dispatch(item)" class="dispatch-btn">调度</button>
+              </div>
+            </div>
+          </div>
+        </PanelBox>
+        
+        <FleetList @select="selectFleet" />
+      </div>
+
+      <div class="bottom-panel">
+        <BottomPanel ref="bottomPanelRef" />
+      </div>
     </div>
   </div>
 </template>
@@ -226,6 +240,27 @@ onMounted(() => {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
+}
+
+.ui-toggle-btn {
+  position: absolute;
+  top: 70px;
+  right: 20px;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--neon-blue);
+  color: var(--neon-blue);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+  transition: all 0.2s;
+}
+
+.ui-toggle-btn:hover {
+  background: rgba(0, 210, 255, 0.25);
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.5);
 }
 
 .loading-text {
