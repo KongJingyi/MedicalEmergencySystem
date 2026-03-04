@@ -9,24 +9,30 @@ export const LOCATIONS = {
   END: { lng: 116.3725, lat: 39.9468, name: "目标医院", color: Cesium.Color.CRIMSON }
 }
 
-// 🛠️ 辅助函数：调整 3D Tiles 的高度
-function adjustTilesetHeight(tileset, heightOffset) {
-  const cartographic = Cesium.Cartographic.fromCartesian(tileset.boundingSphere.center);
+// 🛠️ 升级版辅助函数：同时调整经纬度和高度
+// longitudeOffset / latitudeOffset 单位：弧度；heightOffset 单位：米
+function updateTilesetLocation(tileset, longitudeOffset, latitudeOffset, heightOffset) {
+  const center = tileset.boundingSphere.center;
+  const cartographic = Cesium.Cartographic.fromCartesian(center);
+  
   const surface = Cesium.Cartesian3.fromRadians(
     cartographic.longitude,
     cartographic.latitude,
-    0.0
+    cartographic.height
   );
+  
   const offset = Cesium.Cartesian3.fromRadians(
-    cartographic.longitude,
-    cartographic.latitude,
-    heightOffset
+    cartographic.longitude + longitudeOffset, // 经度偏移 (弧度)
+    cartographic.latitude + latitudeOffset,   // 纬度偏移 (弧度)
+    cartographic.height + heightOffset        // 高度偏移 (米)
   );
+  
   const translation = Cesium.Cartesian3.subtract(
     offset,
     surface,
     new Cesium.Cartesian3()
   );
+  
   tileset.modelMatrix = Cesium.Matrix4.fromTranslation(translation);
 }
 
@@ -65,7 +71,11 @@ export function useCesiumMap() {
     // 2. 加载地形数据（带异常处理）
     let terrainProvider;
     try {
-      terrainProvider = await Cesium.createWorldTerrainAsync();
+      // ❌ 不再使用真实地形，避免不可控的高差
+      // terrainProvider = await Cesium.createWorldTerrainAsync();
+
+      // ✅ 使用椭球体地形：把地球当作光滑的圆球，方便和 3D Tiles 对齐
+      terrainProvider = new Cesium.EllipsoidTerrainProvider();
     } catch (error) {
       console.warn("⚠️ 地形数据加载失败，将使用默认地形", error);
       terrainProvider = undefined;
@@ -139,7 +149,7 @@ export function useCesiumMap() {
       const cityTileset = await Cesium.Cesium3DTileset.fromUrl(
         '/Beijing3D/tileset.json',
         {
-          maximumScreenSpaceError: 16, // 数值越小越精细，但越吃显卡（默认16）
+          maximumScreenSpaceError: 10, // 数值越小越精细，但越吃显卡（默认16）
           maximumMemoryUsage: 2048,    // 允许最大显存 2GB
           skipLevelOfDetail: true,     // 优化加载速度
           baseScreenSpaceError: 1024,
@@ -202,10 +212,13 @@ export function useCesiumMap() {
       // 这一步很重要，因为有时候买的数据坐标系不对，用 zoomTo 能直接定位到模型位置
       viewer.zoomTo(cityTileset);
 
-      // 关键 5：调整高度 (很多买来的模型会悬浮在半空或者陷在地里，这是通病)
-      // 如果你发现模型高度不对，请调整下面的 heightOffset 数值 (单位：米)
-      const heightOffset = -25.0; // 比如：向下沉 25 米
-      adjustTilesetHeight(cityTileset, heightOffset);
+      // 关键 5：位置对齐：经度 / 纬度 / 高度 三个维度（初始值，可用键盘再微调）
+      updateTilesetLocation(
+        cityTileset,
+        0.0,  // longitudeOffset 经度偏移（弧度）
+        0.0,  // latitudeOffset  纬度偏移（弧度）
+        0.0   // heightOffset    高度偏移（米）
+      );
 
       console.log("✅ 真实北京城加载成功！");
     } catch (error) {
