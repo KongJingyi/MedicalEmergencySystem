@@ -1,45 +1,47 @@
 <template>
-  <div class="sci-fi-panel">
-    <svg class="border-svg" width="100%" height="100%">
-      <defs>
-        <linearGradient id="borderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" style="stop-color:var(--neon-blue);stop-opacity:1" />
-          <stop offset="50%" style="stop-color:var(--neon-blue);stop-opacity:0.5" />
-          <stop offset="100%" style="stop-color:var(--neon-blue);stop-opacity:1" />
-        </linearGradient>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-          <feMerge>
-            <feMergeNode in="coloredBlur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-      </defs>
+  <div class="panel-box">
+    <div class="panel-border">
+      <svg class="border-svg" width="100%" height="100%">
+        <defs>
+          <linearGradient id="panelGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#00d2ff;stop-opacity:1" />
+            <stop offset="50%" style="stop-color:#00d2ff;stop-opacity:0.5" />
+            <stop offset="100%" style="stop-color:#00d2ff;stop-opacity:1" />
+          </linearGradient>
+          <filter id="panelGlow">
+            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge>
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
+        
+        <line x1="0" y1="0" x2="30" y2="0" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        <line x1="0" y1="0" x2="0" y2="30" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        
+        <line x1="100%" y1="0" x2="calc(100% - 30px)" y2="0" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        <line x1="100%" y1="0" x2="100%" y2="30" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        
+        <line x1="0" y1="100%" x2="30" y2="100%" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        <line x1="0" y1="100%" x2="0" y2="calc(100% - 30px)" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        
+        <line x1="100%" y1="100%" x2="calc(100% - 30px)" y2="100%" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+        <line x1="100%" y1="100%" x2="100%" y2="calc(100% - 30px)" stroke="#00d2ff" stroke-width="2" filter="url(#panelGlow)"/>
+      </svg>
       
-      <line x1="0" y1="0" x2="30" y2="0" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      <line x1="0" y1="0" x2="0" y2="30" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      
-      <line x1="100%" y1="0" x2="calc(100% - 30px)" y2="0" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      <line x1="100%" y1="0" x2="100%" y2="30" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      
-      <line x1="0" y1="100%" x2="30" y2="100%" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      <line x1="0" y1="100%" x2="0" y2="calc(100% - 30px)" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      
-      <line x1="100%" y1="100%" x2="calc(100% - 30px)" y2="100%" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-      <line x1="100%" y1="100%" x2="100%" y2="calc(100% - 30px)" stroke="var(--neon-blue)" stroke-width="2" filter="url(#glow)"/>
-    </svg>
-
-    <div class="corner top-left"></div>
-    <div class="corner top-right"></div>
-    <div class="corner bottom-left"></div>
-    <div class="corner bottom-right"></div>
+      <div class="corner top-left"></div>
+      <div class="corner top-right"></div>
+      <div class="corner bottom-left"></div>
+      <div class="corner bottom-right"></div>
+    </div>
     
     <div class="panel-header" v-if="title || $slots['header-extra']">
       <div class="header-left">
         <span class="header-deco">///</span>
         <span class="header-title">{{ title }}</span>
       </div>
-      <span class="header-line"></span>
+      <div class="header-line"></div>
       <slot name="header-extra"></slot>
     </div>
     
@@ -50,24 +52,40 @@
 </template>
 
 <script setup>
-defineProps({ title: String })
+defineProps({
+  title: {
+    type: String,
+    default: ''
+  }
+})
 </script>
 
 <style scoped>
-.sci-fi-panel {
+.panel-box {
   position: relative;
-  background: var(--bg-glass);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border-color);
-  padding: 15px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  border: 1px solid rgba(0, 210, 255, 0.3);
+  border-radius: 6px;
+  padding: 14px;
   box-shadow: 
-    0 0 20px rgba(0, 210, 255, 0.1),
-    inset 0 0 30px rgba(0, 210, 255, 0.05);
-  border-radius: 4px;
+    0 0 25px rgba(0, 210, 255, 0.15),
+    0 0 50px rgba(0, 210, 255, 0.05),
+    inset 0 0 40px rgba(0, 210, 255, 0.03);
   overflow: hidden;
+  transition: all 0.3s ease;
 }
 
-.border-svg {
+.panel-box:hover {
+  border-color: rgba(0, 210, 255, 0.5);
+  box-shadow: 
+    0 0 35px rgba(0, 210, 255, 0.25),
+    0 0 70px rgba(0, 210, 255, 0.1),
+    inset 0 0 50px rgba(0, 210, 255, 0.05);
+}
+
+.panel-border {
   position: absolute;
   top: 0;
   left: 0;
@@ -77,61 +95,22 @@ defineProps({ title: String })
   z-index: 1;
 }
 
-.panel-header {
-  position: relative;
-  color: var(--neon-blue);
-  font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif;
-  font-size: 14px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  border-bottom: 1px solid rgba(0, 210, 255, 0.3);
-  padding-bottom: 8px;
-  margin-bottom: 12px;
-  text-shadow: 0 0 8px var(--neon-blue);
-  display: flex;
-  align-items: center;
-  z-index: 2;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-}
-
-.header-deco {
-  margin-right: 8px;
-  opacity: 0.9;
-  font-size: 12px;
-}
-
-.header-title {
-  font-size: 14px;
-}
-
-.header-line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(to right, var(--neon-blue), transparent);
-  margin-left: 12px;
-  opacity: 0.5;
-}
-
-.panel-content {
-  position: relative;
-  z-index: 2;
-  height: calc(100% - 40px);
-  overflow: hidden;
+.border-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .corner {
   position: absolute;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--neon-blue);
+  width: 14px;
+  height: 14px;
+  border: 2px solid #00d2ff;
   transition: all 0.3s ease;
   z-index: 2;
-  box-shadow: 0 0 5px rgba(0, 210, 255, 0.5);
+  box-shadow: 0 0 8px rgba(0, 210, 255, 0.6);
 }
 
 .top-left { 
@@ -159,17 +138,58 @@ defineProps({ title: String })
   border-top: none; 
 }
 
-.sci-fi-panel:hover .corner {
-  width: 18px;
-  height: 18px;
-  box-shadow: 0 0 15px rgba(0, 210, 255, 0.8);
+.panel-box:hover .corner {
+  width: 20px;
+  height: 20px;
+  box-shadow: 0 0 20px rgba(0, 210, 255, 0.8);
 }
 
-.sci-fi-panel:hover {
-  box-shadow: 
-    0 0 30px rgba(0, 210, 255, 0.2),
-    inset 0 0 40px rgba(0, 210, 255, 0.08);
-  border-color: rgba(0, 210, 255, 0.6);
+.panel-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 210, 255, 0.25);
+  z-index: 2;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-deco {
+  color: rgba(0, 210, 255, 0.9);
+  font-family: 'Orbitron', 'Roboto Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.header-title {
+  color: #00d2ff;
+  font-family: 'Orbitron', 'Roboto Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-shadow: 
+    0 0 10px rgba(0, 210, 255, 0.6),
+    0 0 20px rgba(0, 210, 255, 0.3);
+}
+
+.header-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, rgba(0, 210, 255, 0.5), transparent);
+  margin-left: 12px;
+}
+
+.panel-content {
+  position: relative;
+  z-index: 2;
+  height: calc(100% - 40px);
+  overflow: hidden;
 }
 </style>
-

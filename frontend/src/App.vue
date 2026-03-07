@@ -393,15 +393,16 @@ onMounted(() => {
   justify-content: space-between;
 }
 
-.ui-layer .sci-fi-panel {
+.ui-layer .panel-box,
+.ui-layer .panel-box * {
   pointer-events: auto;
 }
 
 .left-panel {
-  width: 450px;
+  width: 320px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .bottom-panel {

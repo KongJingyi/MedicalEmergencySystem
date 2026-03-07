@@ -44,7 +44,7 @@
       </div>
     </div>
 
-    <div class="hud-bottom">
+    <div class="hud-bottom-center">
       <div class="hud-panel">
         <div class="panel-title">航向</div>
         <div class="compass">
@@ -54,6 +54,14 @@
           <div class="compass-value">{{ heading.toFixed(0) }}°</div>
         </div>
       </div>
+    </div>
+
+    <div class="hud-bottom-right">
+      <AttitudeIndicator 
+        :pitch="pitch"
+        :roll="roll"
+        :yaw="yaw"
+      />
     </div>
 
     <div class="hud-corner top-left">
@@ -77,17 +85,25 @@
       </div>
     </div>
 
-    <div class="hud-corner bottom-right">
+    <div class="hud-corner top-right-second">
       <div class="corner-info">
         <span class="info-label">时间</span>
         <span class="info-value">{{ currentTime }}</span>
       </div>
     </div>
   </div>
+  
+  <ElevationChart 
+    :visible="showElevationChart"
+    :pathData="pathData"
+    @close="showElevationChart = false"
+  />
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import AttitudeIndicator from './hud/AttitudeIndicator.vue'
+import ElevationChart from './hud/ElevationChart.vue'
 
 const props = defineProps({
   visible: {
@@ -101,6 +117,13 @@ const speed = ref(45.2)
 const heading = ref(270.5)
 const position = ref({ lat: 39.9042, lon: 116.4074 })
 const currentTime = ref('')
+
+const pitch = ref(0)
+const roll = ref(0)
+const yaw = ref(0)
+
+const showElevationChart = ref(false)
+const pathData = ref([])
 
 const getSpeedColor = (speed) => {
   if (speed < 30) return '#00ff88'
@@ -126,20 +149,47 @@ const updateTime = () => {
   })
 }
 
+const generatePathData = () => {
+  const data = []
+  let distance = 0
+  let altitude = 50
+  for (let i = 0; i < 20; i++) {
+    distance += Math.random() * 0.5 + 0.3
+    altitude += (Math.random() - 0.5) * 30
+    altitude = Math.max(20, Math.min(200, altitude))
+    data.push({
+      distance: distance,
+      altitude: altitude
+    })
+  }
+  return data
+}
+
 let updateInterval = null
 
 onMounted(() => {
   updateTime()
+  pathData.value = generatePathData()
+  
   updateInterval = setInterval(() => {
     updateTime()
     altitude.value = Math.max(0, altitude.value + (Math.random() - 0.5) * 2)
     speed.value = Math.max(0, Math.min(120, speed.value + (Math.random() - 0.5) * 5))
     heading.value = (heading.value + (Math.random() - 0.5) * 2 + 360) % 360
+    
+    pitch.value = Math.max(-45, Math.min(45, pitch.value + (Math.random() - 0.5) * 3))
+    roll.value = Math.max(-30, Math.min(30, roll.value + (Math.random() - 0.5) * 2))
+    yaw.value = (yaw.value + (Math.random() - 0.5) * 5 + 360) % 360
   }, 1000)
 })
 
 onBeforeUnmount(() => {
   if (updateInterval) clearInterval(updateInterval)
+})
+
+defineExpose({
+  showElevationChart,
+  pathData
 })
 </script>
 
@@ -198,34 +248,43 @@ onBeforeUnmount(() => {
 
 .hud-left,
 .hud-right,
-.hud-bottom {
+.hud-bottom-center,
+.hud-bottom-right {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
 }
 
 .hud-left {
+  top: 50%;
   left: 40px;
+  transform: translateY(-50%);
 }
 
 .hud-right {
+  top: 50%;
   right: 40px;
+  transform: translateY(-50%);
 }
 
-.hud-bottom {
-  top: auto;
+.hud-bottom-center {
   bottom: 40px;
   left: 50%;
   transform: translateX(-50%);
 }
 
+.hud-bottom-right {
+  bottom: 40px;
+  right: 40px;
+}
+
 .hud-panel {
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(10px);
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(15px);
   border: 1px solid rgba(0, 210, 255, 0.4);
   border-radius: 8px;
   padding: 12px 16px;
-  box-shadow: 0 0 20px rgba(0, 210, 255, 0.2);
+  box-shadow: 
+    0 0 25px rgba(0, 210, 255, 0.2),
+    inset 0 0 30px rgba(0, 210, 255, 0.05);
   animation: fadeIn 0.5s ease-out;
 }
 
@@ -333,8 +392,8 @@ onBeforeUnmount(() => {
 .hud-corner {
   position: absolute;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(10px);
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(15px);
   border: 1px solid rgba(0, 210, 255, 0.3);
   border-radius: 4px;
   animation: fadeIn 0.5s ease-out;
@@ -355,8 +414,8 @@ onBeforeUnmount(() => {
   left: 20px;
 }
 
-.hud-corner.bottom-right {
-  bottom: 20px;
+.hud-corner.top-right-second {
+  top: 60px;
   right: 20px;
 }
 

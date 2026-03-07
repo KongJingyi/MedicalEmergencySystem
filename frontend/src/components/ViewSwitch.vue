@@ -23,7 +23,7 @@
     </div>
     
     <div class="switch-status">
-      <span class="status-dot" :class="viewMode"></span>
+      <span class="status-dot" :data-mode="viewMode"></span>
       <span class="status-text">{{ viewMode === '2d' ? '全局视图' : '驾驶舱视图' }}</span>
     </div>
   </div>
@@ -140,12 +140,12 @@ defineExpose({ viewMode })
   animation: pulse 2s infinite;
 }
 
-.status-dot.2d {
+.status-dot[data-mode="2d"] {
   background: #00ff88;
   box-shadow: 0 0 10px #00ff88;
 }
 
-.status-dot.3d {
+.status-dot[data-mode="3d"] {
   background: #ff4d4f;
   box-shadow: 0 0 10px #ff4d4f;
 }
