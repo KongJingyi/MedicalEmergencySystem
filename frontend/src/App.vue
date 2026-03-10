@@ -1,6 +1,7 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import axios from 'axios'
+import * as Cesium from 'cesium'
 import Dashboard from './components/Dashboard.vue'
 import DroneCam from './components/DroneCam.vue'
 import PanelBox from './components/ui/PanelBox.vue'
@@ -17,7 +18,7 @@ import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
 import { useAudio } from './hooks/useAudio'
 
-// 资源列表数据（后端接口获取）
+// 资源 / 载具列表数据（后端接口获取 or 本地配置）
 const resources = ref([])
 // 医院压力值（用于无人机调度决策）
 const hospitalPressure = ref(0)
@@ -32,9 +33,31 @@ const alarmBatteryLevel = ref(null)
 const alarmTimestamp = ref('')
 // 是否显示所有 UI 控制面板
 const showPanels = ref(true)
+// 图层开关状态
+const showHospitals = ref(true)
+const showRoadNodes = ref(true)
+
+// 左上角“医疗资源应急调度台”中展示的 13 台载具（静态示例）
+const vehiclePanelList = ref([
+  // 10 架城市无人机
+  { id: 'D-01', type: '无人机', battery: 92, status: '飞行中', position: { lon: 116.40, lat: 39.90 } },
+  { id: 'D-02', type: '无人机', battery: 88, status: '飞行中', position: { lon: 116.42, lat: 39.88 } },
+  { id: 'D-03', type: '无人机', battery: 76, status: '任务中', position: { lon: 116.38, lat: 39.92 } },
+  { id: 'D-04', type: '无人机', battery: 81, status: '待命', position: { lon: 116.44, lat: 39.86 } },
+  { id: 'D-05', type: '无人机', battery: 69, status: '返航中', position: { lon: 116.46, lat: 39.84 } },
+  { id: 'D-06', type: '无人机', battery: 97, status: '飞行中', position: { lon: 116.48, lat: 39.82 } },
+  { id: 'D-07', type: '无人机', battery: 63, status: '任务中', position: { lon: 116.37, lat: 39.91 } },
+  { id: 'D-08', type: '无人机', battery: 58, status: '充电中', position: { lon: 116.49, lat: 39.89 } },
+  { id: 'D-09', type: '无人机', battery: 84, status: '待命', position: { lon: 116.41, lat: 39.87 } },
+  { id: 'D-10', type: '无人机', battery: 91, status: '飞行中', position: { lon: 116.43, lat: 39.93 } },
+  // 3 台救护车
+  { id: 'A-01', type: '救护车', battery: 85, status: '行驶中', position: { lon: 116.40, lat: 39.90 } },
+  { id: 'A-02', type: '救护车', battery: 72, status: '待命', position: { lon: 116.50, lat: 39.80 } },
+  { id: 'A-03', type: '救护车', battery: 91, status: '任务中', position: { lon: 116.30, lat: 39.70 } },
+])
 
 // 解构Cesium地图Hook的方法和响应式对象
-const { viewerRef, initMap } = useCesiumMap()
+const { viewerRef, initMap, toggleLayer } = useCesiumMap()
 
 // 解构无人机Hook的方法和响应式对象，传入地图实例和医院压力值
 const {
@@ -44,6 +67,8 @@ const {
   viewVehicle,
   closeCamera,
   changeWeather,
+  telemetry,
+  routeProfile,
 } = useDrone(viewerRef, hospitalPressure)
 
 // 解构音频Hook的方法
@@ -54,6 +79,22 @@ const dispatch = async (resource) => {
   playClick()
   bottomPanelRef.value?.logRef?.addLog('info', `调度指令下达: ${resource.name}`)
   await droneDispatch(resource)
+}
+
+// 载具调度（左上角 13 台载具列表使用）：镜头飞到对应载具位置
+const dispatchVehicle = (item) => {
+  playClick()
+  bottomPanelRef.value?.logRef?.addLog('info', `调度载具: ${item.id} (${item.type})`)
+  if (item.position && viewerRef.value) {
+    viewerRef.value.camera.flyTo({
+      destination: {
+        longitude: item.position.lon,
+        latitude: item.position.lat,
+        height: item.type === '无人机' ? 800 : 500,
+      },
+      duration: 2,
+    })
+  }
 }
 
 // 从后端接口获取资源列表数据
@@ -122,11 +163,56 @@ const selectFleet = (item) => {
 
 const handleViewChange = (mode) => {
   viewMode.value = mode
-  bottomPanelRef.value?.logRef?.addLog('info', `切换视图模式: ${mode === '2d' ? '全局视图' : '驾驶舱视图'}`)
+  bottomPanelRef.value?.logRef?.addLog(
+    'info',
+    `切换视图模式: ${mode === '2d' ? '全局视图' : '驾驶舱视图'}`
+  )
+
+  const viewer = viewerRef.value
+  if (!viewer) return
+
+  if (mode === '3d') {
+    // 恢复 3D 地球形态
+    viewer.scene.morphTo3D(1.0)
+
+    // 检查是否有活动的载具
+    if (activeDroneEntity.value) {
+      setTimeout(() => {
+        viewer.trackedEntity = activeDroneEntity.value
+        // 设置“驾驶舱”视角的后方偏移：此处用统一偏移
+        const offsetDist = -60
+        viewer.trackedEntity.viewFrom = new Cesium.Cartesian3(offsetDist, 0.0, 30.0)
+      }, 1200)
+    } else {
+      bottomPanelRef.value?.logRef?.addLog(
+        'warn',
+        '当前无执行任务的载具，无法进入跟随视角'
+      )
+    }
+  } else if (mode === '2d') {
+    // 彻底解除相机锁定
+    viewer.trackedEntity = undefined
+
+    // 切换到 2D 模式
+    viewer.scene.morphTo2D(1.0)
+
+    // 飞回城市大局观视角
+    setTimeout(() => {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(116.363, 39.935, 120000),
+        duration: 1.5,
+      })
+    }, 1000)
+  }
 }
 
 const togglePanels = () => {
   showPanels.value = !showPanels.value
+}
+
+const handleSystemAlarm = (e) => {
+  const detail = e.detail || {}
+  triggerAlarm(detail.message, detail.type, detail.batteryLevel)
 }
 
 onMounted(() => {
@@ -134,6 +220,12 @@ onMounted(() => {
   initMap('cesiumContainer')
   // 获取资源数据
   fetchResources()
+  // 监听来自深层组件的系统报警事件
+  window.addEventListener('system-alarm', handleSystemAlarm)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('system-alarm', handleSystemAlarm)
 })
 </script>
 
@@ -168,9 +260,32 @@ onMounted(() => {
       <button @click="playClick(); changeWeather('fog')" title="大雾">🌫️</button>
     </div>
 
+    <div class="layer-controls">
+      <label class="layer-switch">
+        <input
+          type="checkbox"
+          v-model="showHospitals"
+          @change="toggleLayer('hospital', showHospitals)"
+        />
+        <span>医院图层</span>
+      </label>
+      <label class="layer-switch">
+        <input
+          type="checkbox"
+          v-model="showRoadNodes"
+          @change="toggleLayer('road', showRoadNodes)"
+        />
+        <span>路网节点</span>
+      </label>
+    </div>
+
     <ViewSwitch @change="handleViewChange" />
 
-    <HUDOverlay :visible="viewMode === '3d' && showCamera" />
+    <HUDOverlay
+      :visible="viewMode === '3d' && showCamera"
+      :telemetry="telemetry"
+      :pathData="routeProfile"
+    />
 
     <AlarmModal 
       :visible="alarmVisible"
@@ -185,24 +300,21 @@ onMounted(() => {
     <div class="ui-layer">
       <div class="left-panel">
         <PanelBox title="医疗资源应急调度台">
-          <div v-if="resources.length === 0" class="loading-text">加载中...</div>
-          <div v-else>
+          <div class="vehicle-list">
             <div 
-              v-for="item in resources" 
+              v-for="item in vehiclePanelList" 
               :key="item.id"
               class="resource-item"
-              :class="{ selected: selectedResource && selectedResource.id === item.id }"
-              @click="selectResource(item)"
             >
               <div class="info">
-                <div class="name">{{ item.name }}</div>
+                <div class="name">[{{ item.type }}] {{ item.id }}</div>
                 <div class="details">
-                  <span class="detail">库存: {{ item.stock }}</span>
-                  <span class="detail">优先级: {{ item.priority }}</span>
+                  <span class="detail">电量: {{ item.battery }}%</span>
+                  <span class="detail">状态: {{ item.status }}</span>
                 </div>
               </div>
               <div class="btn-group">
-                <button @click.stop="dispatch(item)" class="dispatch-btn">调度</button>
+                <button @click.stop="dispatchVehicle(item)" class="dispatch-btn">调度</button>
               </div>
             </div>
           </div>
@@ -376,6 +488,35 @@ onMounted(() => {
   background: rgba(0, 210, 255, 0.2);
   border-color: var(--neon-blue);
   box-shadow: 0 0 10px rgba(0, 210, 255, 0.4);
+}
+
+.layer-controls {
+  position: absolute;
+  top: 80px;
+  right: 20px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(10px);
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 0 12px rgba(0, 210, 255, 0.15);
+}
+
+.layer-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+}
+
+.layer-switch input {
+  accent-color: var(--neon-blue);
 }
 </style>
 

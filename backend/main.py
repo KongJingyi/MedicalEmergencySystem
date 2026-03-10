@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware  # 解决跨域问题
 from database import create_db_and_tables
 from routers.resources import router as resources_router
 from routers.logistics import router as logistics_router
+from routers.weather import router as weather_router
 
 
 app = FastAPI(title="医疗应急联运系统核心API")
@@ -28,3 +29,4 @@ def on_startup():
 # 挂载路由模块
 app.include_router(resources_router)
 app.include_router(logistics_router)
+app.include_router(weather_router)

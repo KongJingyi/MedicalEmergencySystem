@@ -1,5 +1,5 @@
 // src/hooks/useDrone.js
-import { ref, reactive, markRaw } from 'vue'
+import { ref, reactive, markRaw, watch, computed } from 'vue'
 import axios from 'axios'
 import * as Cesium from 'cesium'
 import gcoord from 'gcoord'
@@ -18,6 +18,38 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // 4. 天气系统实例（懒加载）
   let weatherSystem = null
+
+  // 5. 真实飞行遥测数据（供 HUD 使用）
+  const telemetry = reactive({
+    speed: 0,      // km/h
+    altitude: 0,   // m
+    heading: 0,    // deg
+    pitch: 0,      // deg
+    roll: 0,       // deg
+    yaw: 0,        // deg（这里与 heading 保持一致）
+    battery: 100,  // %
+    lat: 0,        // deg
+    lon: 0,        // deg
+    time: ''       // 本地时间字符串
+  })
+
+  // 6. Cesium 场景帧回调，用于每帧同步当前激活实体的遥测
+  let telemetryHandler = null
+
+  // 7. 全局报警分发（通过 window 自定义事件让 App 统一处理）
+  const triggerSystemAlarm = (msg, type, battery) => {
+    window.dispatchEvent(
+      new CustomEvent('system-alarm', {
+        detail: { message: msg, type, batteryLevel: battery },
+      })
+    )
+  }
+
+  // 8. 简易电量监控定时器
+  let batteryTimer = null
+
+  // 9. 路径剖面数据（距离-高度），供 ECharts 使用
+  const routeProfile = ref([])
 
   const initWeather = () => {
     if (viewerRef.value && !weatherSystem) {
@@ -66,6 +98,35 @@ export function useDrone(viewerRef, hospitalPressure) {
         const wgs84Path = rawPath.map((pt) =>
           gcoord.transform(pt, gcoord.GCJ02, gcoord.WGS84)
         )
+
+        // 生成高度剖面数据：距离 (km) vs 高度 (m)
+        const profileData = []
+        let accumulatedDistance = 0
+
+        for (let i = 0; i < wgs84Path.length; i++) {
+          const [lng, lat] = wgs84Path[i]
+
+          // 模拟飞行高度：无人机中段 200m，起终点落在地面；救护车保持 0m
+          let altitude = isDrone ? 200 : 0
+          if (i === 0 || i === wgs84Path.length - 1) {
+            altitude = 0
+          }
+
+          if (i > 0) {
+            const [prevLng, prevLat] = wgs84Path[i - 1]
+            const prevPos = Cesium.Cartesian3.fromDegrees(prevLng, prevLat)
+            const currPos = Cesium.Cartesian3.fromDegrees(lng, lat)
+            const dist = Cesium.Cartesian3.distance(prevPos, currPos) // m
+            accumulatedDistance += dist
+          }
+
+          profileData.push({
+            distance: accumulatedDistance / 1000, // km
+            altitude,
+          })
+        }
+
+        routeProfile.value = profileData
 
         // 调试用：在地面画一条绿色细线，看路径是否沿着马路
         const viewer = viewerRef.value
@@ -118,6 +179,9 @@ export function useDrone(viewerRef, hospitalPressure) {
     // 区分载体类型（无人机 / 救护车）
     const type = isDrone ? 'DRONE' : 'AMBULANCE';
 
+    // 为机队面板提供一个友好的类型文案
+    newVehicle.logicalType = isDrone ? '无人机' : '救护车';
+
     // 执行载体的飞行/行驶方法：直接吃经过纠偏的路径数组
     newVehicle.flyTo(pathData, type);
 
@@ -163,7 +227,151 @@ export function useDrone(viewerRef, hospitalPressure) {
     droneFleet.clear();
     // 关闭第一视角
     closeCamera();
+
+    // 清理电量监控
+    if (batteryTimer) {
+      clearInterval(batteryTimer)
+      batteryTimer = null
+    }
   }
+
+  // ================= 遥测同步：把 Cesium 实体状态喂给 HUD =================
+
+  const attachTelemetry = () => {
+    const viewer = viewerRef.value
+    if (!viewer || telemetryHandler) return
+
+    let lastPosition = null
+    let lastTime = null
+    let lastBatteryTime = null
+
+    telemetryHandler = (scene, time) => {
+      const entity = activeDroneEntity.value
+      if (!entity || !entity.position) return
+
+      // 使用场景当前时间或 clock 时间均可，这里统一用 clock
+      const currentTime = viewer.clock.currentTime
+      const position = entity.position.getValue(currentTime)
+      const orientation = entity.orientation
+        ? entity.orientation.getValue(currentTime)
+        : null
+
+      if (!position) return
+
+      // 高度 & 经纬度
+      const cartographic = Cesium.Cartographic.fromCartesian(position)
+      telemetry.altitude = cartographic.height
+      telemetry.lat = Cesium.Math.toDegrees(cartographic.latitude)
+      telemetry.lon = Cesium.Math.toDegrees(cartographic.longitude)
+
+      // 速度（基于前后两帧位置和时间差）
+      if (lastPosition && lastTime) {
+        const distance = Cesium.Cartesian3.distance(lastPosition, position) // m
+        const dt = Cesium.JulianDate.secondsDifference(currentTime, lastTime)
+        if (dt > 0) {
+          const speedMs = distance / dt
+          telemetry.speed = speedMs * 3.6 // km/h
+        }
+      }
+      lastPosition = position
+      lastTime = currentTime
+
+      // 姿态：Heading / Pitch / Roll
+      if (orientation) {
+        const hpr = Cesium.HeadingPitchRoll.fromQuaternion(orientation)
+        telemetry.heading = Cesium.Math.toDegrees(hpr.heading)
+        telemetry.pitch = Cesium.Math.toDegrees(hpr.pitch)
+        telemetry.roll = Cesium.Math.toDegrees(hpr.roll)
+        telemetry.yaw = telemetry.heading
+      }
+
+      // 当前时间字符串
+      const jsDate = Cesium.JulianDate.toDate(currentTime)
+      telemetry.time = jsDate.toLocaleTimeString('zh-CN', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      })
+
+      // 简单电量衰减：按时间线性递减，独立于帧率
+      if (telemetry.battery > 0) {
+        if (!lastBatteryTime) {
+          lastBatteryTime = currentTime
+        } else {
+          const dtBattery = Cesium.JulianDate.secondsDifference(
+            currentTime,
+            lastBatteryTime
+          )
+          if (dtBattery > 0.5) {
+            // 每秒约 0.05%，可按需要调整
+            const consume = 0.05 * dtBattery
+            telemetry.battery = Math.max(0, telemetry.battery - consume)
+            lastBatteryTime = currentTime
+          }
+        }
+      }
+    }
+
+    viewer.scene.preUpdate.addEventListener(telemetryHandler)
+  }
+
+  const startBatteryMonitor = () => {
+    if (batteryTimer) return
+    batteryTimer = setInterval(() => {
+      droneFleet.forEach((vehicle, id) => {
+        if (typeof vehicle.battery !== 'number') return
+        // 模拟电量消耗
+        vehicle.battery = Math.max(0, vehicle.battery - 1)
+        if (vehicle.battery < 20 && !vehicle.alarmed) {
+          triggerSystemAlarm(
+            `载具 ${id} 电量极低，即将返航！`,
+            'low_battery',
+            Number(vehicle.battery.toFixed(1))
+          )
+          vehicle.alarmed = true
+        }
+      })
+    }, 5000)
+  }
+
+  const detachTelemetry = () => {
+    const viewer = viewerRef.value
+    if (viewer && telemetryHandler) {
+      viewer.scene.preUpdate.removeEventListener(telemetryHandler)
+      telemetryHandler = null
+    }
+  }
+
+  // 当当前激活实体变化时，自动挂载/卸载遥测监听
+  watch(
+    activeDroneEntity,
+    (entity) => {
+      if (entity) {
+        attachTelemetry()
+        startBatteryMonitor()
+      } else {
+        detachTelemetry()
+      }
+    }
+  )
+
+  // ================= 机队面板数据：把 Map 转成数组 =================
+  const activeFleetList = computed(() => {
+    const list = []
+    droneFleet.forEach((vehicle, id) => {
+      list.push({
+        id,
+        type: vehicle.logicalType || (id.startsWith('drone') ? '无人机' : '救护车'),
+        battery:
+          typeof vehicle.battery === 'number'
+            ? Math.round(vehicle.battery)
+            : Math.floor(Math.random() * 40 + 60),
+        status: vehicle.status || '执行任务中',
+      })
+    })
+    return list
+  })
 
   return {
     droneFleet,
@@ -174,5 +382,8 @@ export function useDrone(viewerRef, hospitalPressure) {
     closeCamera,
     clearAll,
     changeWeather,
+    telemetry,
+    activeFleetList,
+    routeProfile,
   }
 }

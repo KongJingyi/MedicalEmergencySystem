@@ -1,6 +1,7 @@
 // src/hooks/useCesiumMap.js
 import { shallowRef } from 'vue'
 import * as Cesium from 'cesium'
+import axios from 'axios'
 import "cesium/Build/Cesium/Widgets/widgets.css"
 
 // 关键位置定义（起点 -> 终点）
@@ -8,6 +9,10 @@ export const LOCATIONS = {
   START: { lng: 116.3538, lat: 39.9337, name: "调度中心", color: Cesium.Color.CORNFLOWERBLUE },
   END: { lng: 116.3725, lat: 39.9468, name: "目标医院", color: Cesium.Color.CRIMSON }
 }
+
+// 使用 CustomDataSource 管理医院和路网图层，便于一键显隐
+const hospitalSource = new Cesium.CustomDataSource('hospitals')
+const roadNodeSource = new Cesium.CustomDataSource('roadNodes')
 
 // 🛠️ 升级版辅助函数：同时调整经纬度和高度
 // longitudeOffset / latitudeOffset 单位：弧度；heightOffset 单位：米
@@ -62,6 +67,69 @@ export function useCesiumMap() {
   // 对外暴露的添加标记方法（内部调用 addMarkers，保持接口统一）
   const addMarkersPublic = (viewer) => {
     addMarkers(viewer)
+  }
+
+  // 加载医院点位
+  const loadHospitals = async (viewer) => {
+    if (!viewer) return
+    if (!viewer.dataSources.contains(hospitalSource)) {
+      viewer.dataSources.add(hospitalSource)
+    }
+    try {
+      const res = await axios.get('http://127.0.0.1:8000/api/hospitals')
+      hospitalSource.entities.removeAll()
+      res.data.forEach((hosp) => {
+        hospitalSource.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(hosp.lng, hosp.lat, 10),
+          billboard: {
+            image: '/images/hospital-icon.png',
+            scale: 0.7,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          },
+          label: {
+            text: hosp.name,
+            font: '14px sans-serif',
+            pixelOffset: new Cesium.Cartesian2(0, -30),
+            fillColor: Cesium.Color.WHITE,
+            showBackground: true,
+            backgroundColor: new Cesium.Color(0, 0, 0, 0.6),
+          },
+        })
+      })
+    } catch (e) {
+      console.error('医院加载失败', e)
+    }
+  }
+
+  // 加载路网关键节点
+  const loadRoadNodes = async (viewer) => {
+    if (!viewer) return
+    if (!viewer.dataSources.contains(roadNodeSource)) {
+      viewer.dataSources.add(roadNodeSource)
+    }
+    try {
+      const res = await axios.get('http://127.0.0.1:8000/api/road_nodes')
+      roadNodeSource.entities.removeAll()
+      res.data.forEach((node) => {
+        roadNodeSource.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(node.lng, node.lat, 2),
+          point: {
+            pixelSize: 6,
+            color: Cesium.Color.YELLOW,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1,
+          },
+        })
+      })
+    } catch (e) {
+      console.error('路网加载失败', e)
+    }
+  }
+
+  // 图层显示/隐藏控制
+  const toggleLayer = (layerName, isShow) => {
+    if (layerName === 'hospital') hospitalSource.show = isShow
+    if (layerName === 'road') roadNodeSource.show = isShow
   }
 
   const initMap = async (containerId) => {
@@ -239,6 +307,9 @@ export function useCesiumMap() {
     // 6. 添加标记点到地图
     addMarkers(viewer);
 
+    // 7. 加载医院与路网图层（默认开启）
+    await Promise.all([loadHospitals(viewer), loadRoadNodes(viewer)])
+
     // 将实例挂载到 ref 并暴露到全局（方便调试）
     viewerRef.value = viewer;
     window.viewer = viewer; // 方便开发者调试
@@ -249,6 +320,7 @@ export function useCesiumMap() {
   return {
     viewerRef,
     initMap,
-    addMarkers: addMarkersPublic // 对外暴露统一的添加标记方法
+    addMarkers: addMarkersPublic, // 对外暴露统一的添加标记方法
+    toggleLayer,
   }
 }

@@ -1,9 +1,59 @@
-# backend/algorithms.py
 import json
 import math
 import os
 import random
 from typing import Dict, List, Tuple
+
+
+# ===============================
+#  业务规则常量（风险阈值 & 天气）
+# ===============================
+
+# 电量安全下限（%）
+MIN_BATTERY_SAFE = 20.0
+# 假定无人机抗风极限（当前仅为示意）
+MAX_DRONE_WIND = 6
+# 温度敏感物资关键字
+TEMP_SENSITIVE_ITEMS = ["血浆", "疫苗"]
+
+# 全局当前天气状态（由 /api/weather/set 更新）
+CURRENT_WEATHER: str = "sunny"
+
+
+def set_weather(weather: str) -> None:
+    """
+    更新当前天气（后端全局）。
+    允许值：sunny / rain / snow / fog
+    """
+    global CURRENT_WEATHER
+    if weather in {"sunny", "rain", "snow", "fog"}:
+        CURRENT_WEATHER = weather
+
+
+def get_weather() -> str:
+    return CURRENT_WEATHER
+
+
+def get_speed_kmh(route_type: str) -> float:
+    """
+    根据运输方式 + 当前天气，给出用于 ETA 的平均速度（km/h）。
+    """
+    weather = get_weather()
+
+    if route_type == "DRONE":
+        base = 120.0
+        if weather == "fog":
+            base *= 0.7  # 大雾降速
+        # 大雪时我们主要通过评分一票否决，速度仍保持以便做 ETA 估算
+        return base
+
+    # AMBULANCE
+    base = 60.0
+    if weather == "rain":
+        base *= 0.8  # 雨天路滑
+    elif weather == "snow":
+        base *= 0.5  # 大雪严重减速
+    return base
 
 
 # ===============================
@@ -18,14 +68,34 @@ def calculate_medical_score(resource, route_type: str) -> Dict:
     """
     logs: List[str] = []
 
-    # 1. 速度评分：无人机更快
-    # 这里简单做成常数，后续可以接入真实 ETA
+    # 1. 速度评分：无人机更快（基础分）
     if route_type == "DRONE":
         speed_score = 95
         logs.append("🕒 速度：无人机平均时效更快，基础速度评分 95")
     else:
         speed_score = 75
         logs.append("🕒 速度：地面救护车受路况影响，基础速度评分 75")
+
+    # 1.1 天气对速度/安全的影响（基于 CURRENT_WEATHER）
+    weather = get_weather()
+    if route_type == "DRONE":
+        if weather == "rain":
+            speed_score -= 20
+            logs.append("🌧 雨天：无人机受降水和风切变影响，速度评分 -20")
+        elif weather == "snow":
+            # 大雪禁飞：一票否决
+            speed_score = 0
+            logs.append("❄ 大雪：当前策略为无人机禁飞，速度评分直接降为 0")
+        elif weather == "fog":
+            speed_score *= 0.7
+            logs.append("🌫 大雾：能见度下降，无人机速度评分降至 70%")
+    else:
+        if weather == "rain":
+            speed_score *= 0.8
+            logs.append("🌧 雨天：路面湿滑，地面救护车速度评分降至 80%")
+        elif weather == "snow":
+            speed_score *= 0.5
+            logs.append("❄ 大雪：道路阻塞严重，救护车速度评分降至 50%")
 
     # 2. 防震评分：看运输震动 vs 物资耐受度
     vehicle_shock = 8 if route_type == "DRONE" else 2
@@ -65,7 +135,8 @@ def calculate_medical_score(resource, route_type: str) -> Dict:
         f"防震({shock_score})*0.3 - 天气({bad_weather:.1f})*0.2 = {score:.1f}"
     )
 
-    return {"score": score, "logs": logs}
+    # 返回时额外带上天气恶劣系数，后续用于风险评估
+    return {"score": score, "logs": logs, "bad_weather": bad_weather}
 
 
 # ===============================
@@ -184,3 +255,70 @@ def compute_route(start_name: str, end_name: str) -> List[Dict]:
         )
 
     return path_points
+
+
+# ===============================
+#  路径风险评估（电量 / 温控 等）
+# ===============================
+
+def evaluate_risks(
+    resource, route_type: str, distance_km: float, bad_weather: float
+) -> List[Dict]:
+    """
+    根据路径长度、物资属性和天气，给出风险告警列表。
+    """
+    warnings: List[Dict] = []
+
+    if distance_km <= 0:
+        return warnings
+
+    # 粗略 ETA 估算（考虑天气后的速度）
+    speed_kmh = get_speed_kmh(route_type)
+    eta_hours = distance_km / speed_kmh if speed_kmh > 0 else 0.0
+    eta_minutes = eta_hours * 60.0
+
+    # 规则 1：无人机续航检查（到达时预期电量是否低于安全阈值）
+    if route_type == "DRONE":
+        # 假设每公里约耗电 2%（与前端机队状态模型保持大致一致）
+        consumption_per_km = 2.0
+        estimated_battery = max(0.0, 100.0 - distance_km * consumption_per_km)
+        if estimated_battery < MIN_BATTERY_SAFE:
+            warnings.append(
+                {
+                    "code": "BATTERY_RISK",
+                    "msg": "无人机预期电量将低于20%，极度危险！",
+                    "level": "CRITICAL",
+                }
+            )
+
+        # 示例：极端恶劣天气下的附加告警（如果 bad_weather 非常大）
+        if bad_weather >= 80.0:
+            warnings.append(
+                {
+                    "code": "WEATHER_RISK",
+                    "msg": "当前天气条件对无人机飞行极不利，存在失联风险。",
+                    "level": "WARNING",
+                }
+            )
+
+    # 规则 2：冷链超时检查（极寒疫苗/血浆）
+    # 简单根据名称或类别中是否包含敏感关键字来判断
+    name = getattr(resource, "name", "") or ""
+    category = getattr(resource, "category", "") or ""
+    is_temp_sensitive = any(key in name for key in TEMP_SENSITIVE_ITEMS) or any(
+        key in category for key in TEMP_SENSITIVE_ITEMS
+    )
+
+    if is_temp_sensitive:
+        # 假定保温箱极限时长 60 分钟
+        max_cold_chain_minutes = 60.0
+        if eta_minutes > max_cold_chain_minutes:
+            warnings.append(
+                {
+                    "code": "TEMP_RISK",
+                    "msg": "冷链预计运输时间超过安全时限，存在温控失效风险。",
+                    "level": "CRITICAL",
+                }
+            )
+
+    return warnings

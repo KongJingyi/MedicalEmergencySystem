@@ -1,8 +1,17 @@
 from fastapi import APIRouter, Depends
-from sqlmodel import Session
+from sqlmodel import Session, SQLModel
+from typing import Dict, List
+import math
+import time
+
 from database import get_session
 from models import MedicalResource, RouteRequest
-from algorithms import calculate_medical_score, compute_route
+from algorithms import (
+    calculate_medical_score,
+    compute_route,
+    evaluate_risks,
+    get_speed_kmh,
+)
 
 router = APIRouter(prefix="/api", tags=["logistics"])
 
@@ -18,6 +27,113 @@ LOCATION_MAPPING = {
     "START": "西直门桥",            # 兼容测试
     "END": "德胜门桥"               # 兼容测试
 }
+
+
+# ================================
+#   机队状态内存缓存 (ACTIVE_FLEET)
+# ================================
+
+class FleetState(SQLModel):
+    id: str
+    type: str  # DRONE / AMBULANCE
+    status: str  # FLYING / ARRIVED
+    current_lng: float
+    current_lat: float
+    battery: float
+    eta_seconds: float
+
+
+ACTIVE_FLEET: Dict[str, Dict] = {}
+
+
+def _haversine_distance_m(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
+    """简易球面距离计算，单位：米。"""
+    r = 6371000.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(
+        dlambda / 2
+    ) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return r * c
+
+
+def _compute_segment_lengths(path: List[List[float]]) -> List[float]:
+    """返回每一段的长度数组，单位：米。len = len(path) - 1"""
+    segs: List[float] = []
+    for i in range(1, len(path)):
+        lng1, lat1 = path[i - 1]
+        lng2, lat2 = path[i]
+        segs.append(_haversine_distance_m(lng1, lat1, lng2, lat2))
+    return segs
+
+
+def _register_fleet(resource_id: int, path: List[List[float]], use_drone: bool) -> None:
+    """
+    在内存中登记一个新的在途载具。
+    """
+    if not path:
+        return
+
+    # 生成唯一 ID
+    fleet_id = f"{'drone' if use_drone else 'car'}-{resource_id}-{int(time.time())}"
+
+    # 设定不同载具的平均速度（m/s），结合当前天气
+    speed_kmh = get_speed_kmh("DRONE" if use_drone else "AMBULANCE")
+    speed_mps = speed_kmh * 1000.0 / 3600.0
+
+    seg_lengths = _compute_segment_lengths(path)
+    total_distance = sum(seg_lengths) if seg_lengths else 0.0
+
+    ACTIVE_FLEET[fleet_id] = {
+        "id": fleet_id,
+        "type": "DRONE" if use_drone else "AMBULANCE",
+        "resource_id": resource_id,
+        "path": path,
+        "segment_lengths": seg_lengths,
+        "distance_total": total_distance,
+        "speed_mps": speed_mps,
+        "start_time": time.time(),
+        "battery_start": 100.0,
+    }
+
+
+def _interpolate_position(
+    path: List[List[float]],
+    seg_lengths: List[float],
+    target_distance: float,
+) -> Dict[str, float]:
+    """
+    在多段路径上按照累计距离插值，返回当前位置经纬度。
+    """
+    if not path:
+        return {"lng": 0.0, "lat": 0.0}
+    if len(path) == 1 or not seg_lengths:
+        lng, lat = path[0]
+        return {"lng": lng, "lat": lat}
+
+    remaining = target_distance
+    for i, seg_len in enumerate(seg_lengths):
+        if remaining > seg_len and i < len(seg_lengths) - 1:
+            remaining -= seg_len
+            continue
+
+        # 当前段内插值
+        start_lng, start_lat = path[i]
+        end_lng, end_lat = path[i + 1]
+        if seg_len <= 0:
+            return {"lng": end_lng, "lat": end_lat}
+        t = max(0.0, min(1.0, remaining / seg_len))
+        lng = start_lng + (end_lng - start_lng) * t
+        lat = start_lat + (end_lat - start_lat) * t
+        return {"lng": lng, "lat": lat}
+
+    # 超出终点：返回最后一个点
+    lng, lat = path[-1]
+    return {"lng": lng, "lat": lat}
 
 @router.post("/plan_route")
 def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
@@ -42,23 +158,59 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
 
     print(f"🗺️ 路径规划: {request.start_node}({real_start}) -> {request.end_node}({real_end})")
 
+    total_distance_km = 0.0
+
     try:
         # 4. 结合路网计算路径
         path_points = compute_route(real_start, real_end)
-        
+
         # 格式化为前端需要的 [[lng, lat], ...]
         path = [[p["lng"], p["lat"]] for p in path_points]
-        
+
+        # 在内存中登记一个新的在途载具，供 /api/fleet 实时查询
+        if path:
+            # 计算总距离（km），用于风险评估和机队 ETA
+            for i in range(1, len(path)):
+                lng1, lat1 = path[i - 1]
+                lng2, lat2 = path[i]
+                total_distance_km += _haversine_distance_m(lng1, lat1, lng2, lat2) / 1000.0
+
+            _register_fleet(
+                resource_id=request.resource_id,
+                path=path,
+                use_drone=recommend_drone,
+            )
+
     except Exception as e:
         print(f"❌ 寻路失败: {e}")
         # 如果寻路失败（比如节点名字不对），返回一个空的路径，防止前端崩溃
         # 或者返回一条只有起终点的直线作为兜底
         path = []
 
+    # 库存扣减闭环：每次成功规划路径，代表一次调度机会，先扣减一次库存
+    if resource and getattr(resource, "stock", None) is not None:
+        if resource.stock > 0:
+            resource.stock -= 1
+            session.add(resource)
+            session.commit()
+            session.refresh(resource)
+
+    # 基于推荐方案做一次风险评估
+    chosen_type = "DRONE" if recommend_drone else "AMBULANCE"
+    chosen_score = drone_result if recommend_drone else ambulance_result
+    bad_weather = chosen_score.get("bad_weather", 0.0)
+    warnings = evaluate_risks(
+        resource=resource,
+        route_type=chosen_type,
+        distance_km=total_distance_km,
+        bad_weather=bad_weather,
+    )
+
     return {
         "resource_id": request.resource_id,
         "recommend": recommend_drone,
         "path": path, # 这里返回的是真实的路径点
+        "warnings": warnings,
 
         # 完整信息
         "resource_info": resource,
@@ -91,3 +243,51 @@ def route(request: RouteRequest):
         return {"path_points": path_points}
     except:
         return {"path_points": []}
+
+
+@router.get("/fleet", response_model=List[FleetState])
+def get_fleet():
+    """
+    机队实时状态接口。
+
+    基于内存中的 ACTIVE_FLEET，按当前时间计算每个载具的经纬度、电量和剩余时间。
+    """
+    now = time.time()
+    result: List[FleetState] = []
+
+    for fleet in ACTIVE_FLEET.values():
+        path: List[List[float]] = fleet["path"]
+        seg_lengths: List[float] = fleet["segment_lengths"]
+        total_dist: float = fleet["distance_total"]
+        speed_mps: float = fleet["speed_mps"]
+        start_time: float = fleet["start_time"]
+
+        if not path or total_dist <= 0 or speed_mps <= 0:
+            continue
+
+        elapsed = max(0.0, now - start_time)
+        travelled = min(total_dist, elapsed * speed_mps)
+
+        status = "ARRIVED" if travelled >= total_dist else "FLYING"
+        eta = 0.0 if status == "ARRIVED" else (total_dist - travelled) / speed_mps
+
+        # 简单电量模型：每公里消耗固定百分比
+        km_travelled = travelled / 1000.0
+        consumption_per_km = 2.0  # 每公里约 2%
+        battery = max(0.0, fleet["battery_start"] - km_travelled * consumption_per_km)
+
+        pos = _interpolate_position(path, seg_lengths, travelled)
+
+        result.append(
+            FleetState(
+                id=fleet["id"],
+                type=fleet["type"],
+                status=status,
+                current_lng=pos["lng"],
+                current_lat=pos["lat"],
+                battery=round(battery, 1),
+                eta_seconds=round(eta, 1),
+            )
+        )
+
+    return result

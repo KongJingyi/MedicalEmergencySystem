@@ -28,6 +28,10 @@ class MedicalResource(SQLModel, table=True):
     weight_kg: float = Field(description="单体重量 (kg)")
     volume_L: float = Field(description="单体体积 (L)")
 
+    # === 真实供给约束 ===
+    stock: int = Field(default=0, description="当前库存数量")
+    priority: int = Field(default=3, description="调度优先级 (1-5)")
+
 
 class Hospital(SQLModel, table=True):
     """
@@ -39,6 +43,22 @@ class Hospital(SQLModel, table=True):
     lat: float = Field(description="纬度")
     level: str = Field(description="医院等级，如三甲")
     address: str = Field(description="详细地址")
+
+
+class HospitalStatus(SQLModel, table=True):
+    """
+    医院压力状态表：承载 ICU 占用、急诊排队等动态负载信息。
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    hospital_name: str = Field(index=True, description="医院名称（关联 Hospital.name）")
+    icu_occupancy_rate: float = Field(
+        description="ICU 占用率 (0-100, 百分比)"
+    )
+    er_queue_length: int = Field(description="急诊排队人数")
+    emergency_level: int = Field(
+        description="应急等级：1=绿色, 2=黄色, 3=橙色, 4=红色"
+    )
 
 
 class RoadNode(SQLModel, table=True):

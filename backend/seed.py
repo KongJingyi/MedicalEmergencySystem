@@ -2,7 +2,7 @@ import json
 
 from sqlmodel import Session, SQLModel, create_engine
 
-from models import Hospital, RoadNode, MedicalResource
+from models import Hospital, RoadNode, MedicalResource, HospitalStatus
 
 
 sqlite_file_name = "database.db"
@@ -54,6 +54,8 @@ def seed_demo_resources() -> None:
             urgency_level=5,
             weight_kg=0.5,
             volume_L=0.5,
+            stock=5,
+            priority=5,
         )
 
         vaccine = MedicalResource(
@@ -65,6 +67,8 @@ def seed_demo_resources() -> None:
             urgency_level=3,
             weight_kg=0.2,
             volume_L=0.1,
+            stock=10,
+            priority=4,
         )
 
         suit = MedicalResource(
@@ -76,6 +80,8 @@ def seed_demo_resources() -> None:
             urgency_level=2,
             weight_kg=1.0,
             volume_L=5.0,
+            stock=100,
+            priority=2,
         )
 
         session.add(blood)
@@ -89,5 +95,29 @@ if __name__ == "__main__":
     seed_hospitals()
     seed_road_nodes()
     seed_demo_resources()
-    print("✅ Seed completed: hospitals, road nodes and demo medical resources.")
+
+    # 为所有医院注入一份初始压力数据
+    with Session(engine) as session:
+        session.query(HospitalStatus).delete()
+        hospitals = session.query(Hospital).all()
+        for hosp in hospitals:
+            # 默认中等压力
+            icu = 70.0
+            er_queue = 10
+            level = 2
+            # 为积水潭医院制造紧张感
+            if "积水潭" in hosp.name:
+                icu = 92.0
+                er_queue = 25
+                level = 4
+            status = HospitalStatus(
+                hospital_name=hosp.name,
+                icu_occupancy_rate=icu,
+                er_queue_length=er_queue,
+                emergency_level=level,
+            )
+            session.add(status)
+        session.commit()
+
+    print("✅ Seed completed: hospitals, road nodes, demo medical resources and hospital status.")
 

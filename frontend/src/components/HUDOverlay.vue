@@ -94,14 +94,14 @@
   </div>
   
   <ElevationChart 
-    :visible="showElevationChart"
+    :visible="elevationVisible"
     :pathData="pathData"
-    @close="showElevationChart = false"
+    @close="() => {}"
   />
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed } from 'vue'
 import AttitudeIndicator from './hud/AttitudeIndicator.vue'
 import ElevationChart from './hud/ElevationChart.vue'
 
@@ -109,21 +109,34 @@ const props = defineProps({
   visible: {
     type: Boolean,
     default: false
+  },
+  telemetry: {
+    type: Object,
+    default: () => ({})
+  },
+  pathData: {
+    type: Array,
+    default: () => []
   }
 })
 
-const altitude = ref(150.5)
-const speed = ref(45.2)
-const heading = ref(270.5)
-const position = ref({ lat: 39.9042, lon: 116.4074 })
-const currentTime = ref('')
+// 从父组件传入的遥测数据派生出本地只读视图
+const altitude = computed(() => props.telemetry.altitude ?? 0)
+const speed = computed(() => props.telemetry.speed ?? 0)
+const heading = computed(() => props.telemetry.heading ?? 0)
+const position = computed(() => ({
+  lat: props.telemetry.lat ?? 0,
+  lon: props.telemetry.lon ?? 0
+}))
+const currentTime = computed(() => props.telemetry.time ?? '')
 
-const pitch = ref(0)
-const roll = ref(0)
-const yaw = ref(0)
+const pitch = computed(() => props.telemetry.pitch ?? 0)
+const roll = computed(() => props.telemetry.roll ?? 0)
+const yaw = computed(() => props.telemetry.yaw ?? 0)
 
-const showElevationChart = ref(false)
-const pathData = ref([])
+const elevationVisible = computed(
+  () => props.visible && props.pathData && props.pathData.length > 0
+)
 
 const getSpeedColor = (speed) => {
   if (speed < 30) return '#00ff88'
@@ -139,58 +152,7 @@ const getSpeedDash = (speed) => {
   return `${circumference * percentage} ${circumference}`
 }
 
-const updateTime = () => {
-  const now = new Date()
-  currentTime.value = now.toLocaleTimeString('zh-CN', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
-}
-
-const generatePathData = () => {
-  const data = []
-  let distance = 0
-  let altitude = 50
-  for (let i = 0; i < 20; i++) {
-    distance += Math.random() * 0.5 + 0.3
-    altitude += (Math.random() - 0.5) * 30
-    altitude = Math.max(20, Math.min(200, altitude))
-    data.push({
-      distance: distance,
-      altitude: altitude
-    })
-  }
-  return data
-}
-
-let updateInterval = null
-
-onMounted(() => {
-  updateTime()
-  pathData.value = generatePathData()
-  
-  updateInterval = setInterval(() => {
-    updateTime()
-    altitude.value = Math.max(0, altitude.value + (Math.random() - 0.5) * 2)
-    speed.value = Math.max(0, Math.min(120, speed.value + (Math.random() - 0.5) * 5))
-    heading.value = (heading.value + (Math.random() - 0.5) * 2 + 360) % 360
-    
-    pitch.value = Math.max(-45, Math.min(45, pitch.value + (Math.random() - 0.5) * 3))
-    roll.value = Math.max(-30, Math.min(30, roll.value + (Math.random() - 0.5) * 2))
-    yaw.value = (yaw.value + (Math.random() - 0.5) * 5 + 360) % 360
-  }, 1000)
-})
-
-onBeforeUnmount(() => {
-  if (updateInterval) clearInterval(updateInterval)
-})
-
-defineExpose({
-  showElevationChart,
-  pathData
-})
+// 不再需要向外暴露内部状态
 </script>
 
 <style scoped>

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlmodel import Session, select, delete
 
 from database import get_session
-from models import MedicalResource, Hospital, RoadNode
+from models import MedicalResource, Hospital, RoadNode, HospitalStatus
 
 
 router = APIRouter(prefix="/api", tags=["resources"])
@@ -18,6 +19,12 @@ def get_resources(session: Session = Depends(get_session)):
 def get_hospitals(session: Session = Depends(get_session)):
     """获取所有医院点，用于前端在地图上画医院红点。"""
     return session.exec(select(Hospital)).all()
+
+
+@router.get("/hospitals/status")
+def get_hospital_status(session: Session = Depends(get_session)):
+    """获取各医院的实时压力状态，用于 Dashboard 仪表盘。"""
+    return session.exec(select(HospitalStatus)).all()
 
 
 @router.get("/road_nodes")
@@ -44,6 +51,8 @@ def seed_demo_data(session: Session = Depends(get_session)):
         urgency_level=5,
         weight_kg=0.5,
         volume_L=0.5,
+        stock=5,
+        priority=5,
     )
 
     vaccine = MedicalResource(
@@ -55,6 +64,8 @@ def seed_demo_data(session: Session = Depends(get_session)):
         urgency_level=3,
         weight_kg=0.2,
         volume_L=0.1,
+        stock=10,
+        priority=4,
     )
 
     suit = MedicalResource(
@@ -66,6 +77,8 @@ def seed_demo_data(session: Session = Depends(get_session)):
         urgency_level=2,
         weight_kg=1.0,
         volume_L=5.0,
+        stock=100,
+        priority=2,
     )
 
     session.add(blood)
@@ -74,4 +87,27 @@ def seed_demo_data(session: Session = Depends(get_session)):
     session.commit()
 
     return {"message": "✅ 3种典型医疗资源已注入数据库"}
+
+
+class RelievePayload(BaseModel):
+    hospital_name: str
+    delta: int = 1
+
+
+@router.post("/hospitals/relieve")
+def relieve_hospital_pressure(payload: RelievePayload, session: Session = Depends(get_session)):
+    """
+    当任务完成、资源送达时，调用此接口以缓解对应医院的急诊压力。
+    """
+    status = session.exec(
+        select(HospitalStatus).where(HospitalStatus.hospital_name == payload.hospital_name)
+    ).first()
+    if not status:
+        return {"message": "hospital status not found"}
+
+    status.er_queue_length = max(0, status.er_queue_length - payload.delta)
+    session.add(status)
+    session.commit()
+    session.refresh(status)
+    return status
 

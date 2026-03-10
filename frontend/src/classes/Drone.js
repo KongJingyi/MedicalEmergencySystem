@@ -16,6 +16,10 @@ export class Drone {
     this.onArrivedCallback = null; // 到达后的回调
     this._onStopListener = null; // 保存监听器引用，方便清理
     this.typeConfig = null; // 存储当前是哪种载具
+
+    // 简单电量状态：初始 100%，用于触发低电量报警
+    this.battery = 100;
+    this.alarmed = false;
   }
 
   /**
