@@ -170,8 +170,8 @@ onBeforeUnmount(() => {
 .right-panel {
   position: absolute;
   right: 20px;
-  top: 220px;
-  width: 450px;
+  top: 200px;
+  width: clamp(380px, 26vw, 480px);
   z-index: 998;
 }
 

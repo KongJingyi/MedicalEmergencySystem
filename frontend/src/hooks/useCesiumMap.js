@@ -81,10 +81,11 @@ export function useCesiumMap() {
       res.data.forEach((hosp) => {
         hospitalSource.entities.add({
           position: Cesium.Cartesian3.fromDegrees(hosp.lng, hosp.lat, 10),
-          billboard: {
-            image: '/images/hospital-icon.png',
-            scale: 0.7,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          point: {
+            pixelSize: 10,
+            color: Cesium.Color.RED.withAlpha(0.9),
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.9),
+            outlineWidth: 2,
           },
           label: {
             text: hosp.name,

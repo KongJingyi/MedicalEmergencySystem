@@ -87,13 +87,22 @@ const dispatchVehicle = (item) => {
   bottomPanelRef.value?.logRef?.addLog('info', `调度载具: ${item.id} (${item.type})`)
   if (item.position && viewerRef.value) {
     viewerRef.value.camera.flyTo({
-      destination: {
-        longitude: item.position.lon,
-        latitude: item.position.lat,
-        height: item.type === '无人机' ? 800 : 500,
-      },
+      destination: Cesium.Cartesian3.fromDegrees(
+        item.position.lon,
+        item.position.lat,
+        item.type === '无人机' ? 800 : 500
+      ),
       duration: 2,
     })
+  }
+
+  // 触发一次真实“调度任务”（需要后端 /api/plan_route 正常运行）
+  const resource = selectedResource.value || resources.value?.[0]
+  if (resource) {
+    bottomPanelRef.value?.logRef?.addLog('info', `关联物资调度: ${resource.name}`)
+    droneDispatch(resource)
+  } else {
+    bottomPanelRef.value?.logRef?.addLog('warn', '未加载到物资数据，无法发起路径规划调度')
   }
 }
 
@@ -151,11 +160,7 @@ const selectFleet = (item) => {
   bottomPanelRef.value?.logRef?.addLog('info', `选中机队: ${item.id} (${item.type})`)
   if (item.position && viewerRef.value) {
     viewerRef.value.camera.flyTo({
-      destination: {
-        longitude: item.position.lon,
-        latitude: item.position.lat,
-        height: 500
-      },
+      destination: Cesium.Cartesian3.fromDegrees(item.position.lon, item.position.lat, 500),
       duration: 2
     })
   }
@@ -540,10 +545,31 @@ onBeforeUnmount(() => {
 }
 
 .left-panel {
-  width: 320px;
+  width: clamp(320px, 22vw, 380px);
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* 左侧载具列表：固定小窗 + 滚轮 */
+.vehicle-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.vehicle-list::-webkit-scrollbar {
+  width: 4px;
+}
+.vehicle-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.5);
+}
+.vehicle-list::-webkit-scrollbar-thumb {
+  background: var(--neon-blue);
+  border-radius: 2px;
+}
+.vehicle-list::-webkit-scrollbar-thumb:hover {
+  background: #00cc6e;
 }
 
 .bottom-panel {
