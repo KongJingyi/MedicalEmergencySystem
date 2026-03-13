@@ -90,11 +90,40 @@ def seed_demo_resources() -> None:
         session.commit()
 
 
+def seed_resources_from_file(path: str = "data/resources.json") -> None:
+    """
+    从 JSON 文件批量写入医疗物资数据。
+
+    文件格式：数组，每一项字段需与 MedicalResource 对齐：
+    name/category/min_temp/max_temp/shock_sensitivity/urgency_level/weight_kg/volume_L/stock/priority
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            resources = json.load(f)
+    except FileNotFoundError:
+        print(f"⚠️ 未找到 {path}，将回退到 3 条演示物资。")
+        seed_demo_resources()
+        return
+
+    if not isinstance(resources, list) or len(resources) == 0:
+        print(f"⚠️ {path} 内容为空或格式不正确，回退到 3 条演示物资。")
+        seed_demo_resources()
+        return
+
+    with Session(engine) as session:
+        session.query(MedicalResource).delete()
+        for item in resources:
+            session.add(MedicalResource(**item))
+        session.commit()
+    print(f"✅ 已从 {path} 导入 {len(resources)} 条医疗物资。")
+
+
 if __name__ == "__main__":
     create_db_and_tables()
     seed_hospitals()
     seed_road_nodes()
-    seed_demo_resources()
+    # 优先导入专业物资库；若文件缺失则回退到演示数据
+    seed_resources_from_file()
 
     # 为所有医院注入一份初始压力数据
     with Session(engine) as session:

@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
-from sqlmodel import Session, SQLModel
-from typing import Dict, List
+from sqlmodel import Session, SQLModel, select
+from typing import Dict, List, Optional
+import json
 import math
 import time
 
 from database import get_session
-from models import MedicalResource, RouteRequest
+from models import MedicalResource, RouteRequest, DispatchTask, RiskEvent, DecisionLog
 from algorithms import (
     calculate_medical_score,
     compute_route,
@@ -187,14 +188,6 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
         # 或者返回一条只有起终点的直线作为兜底
         path = []
 
-    # 库存扣减闭环：每次成功规划路径，代表一次调度机会，先扣减一次库存
-    if resource and getattr(resource, "stock", None) is not None:
-        if resource.stock > 0:
-            resource.stock -= 1
-            session.add(resource)
-            session.commit()
-            session.refresh(resource)
-
     # 基于推荐方案做一次风险评估
     chosen_type = "DRONE" if recommend_drone else "AMBULANCE"
     chosen_score = drone_result if recommend_drone else ambulance_result
@@ -205,13 +198,78 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
         distance_km=total_distance_km,
         bad_weather=bad_weather,
     )
+    # ================================
+    #   持久化：调度任务 / 风险事件 / 决策日志
+    # ================================
+
+    task = DispatchTask(
+        resource_id=request.resource_id,
+        qty=1,  # 当前前端未传数量，默认一次调度 1 单位
+        start_node=real_start,
+        end_node=real_end,
+        status="CREATED",
+        recommended_mode=chosen_type,
+        planned_distance_km=total_distance_km or None,
+        planned_eta_seconds=None,
+        path_json=json.dumps(path or []),
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    # 库存扣减闭环：每次成功规划路径，代表一次调度机会，先扣减一次库存
+    if resource and getattr(resource, "stock", None) is not None:
+        if resource.stock > 0:
+            resource.stock -= 1
+            session.add(resource)
+            session.commit()
+            session.refresh(resource)
+
+    # 将风险评估结果写入 RiskEvent
+    for w in warnings:
+        session.add(
+            RiskEvent(
+                task_id=task.id,
+                code=w.get("code", "UNKNOWN"),
+                level=w.get("level", "WARNING"),
+                msg=w.get("msg", ""),
+                details_json=json.dumps(w, ensure_ascii=False),
+            )
+        )
+
+    # 决策日志：记录输入/输出与解释
+    decision = DecisionLog(
+        task_id=task.id,
+        algorithm_version="v1",
+        params_json=None,
+        input_json=json.dumps(
+            {
+                "resource_id": request.resource_id,
+                "start_node": request.start_node,
+                "end_node": request.end_node,
+                "weather": chosen_score.get("bad_weather", None),
+            },
+            ensure_ascii=False,
+        ),
+        output_json=json.dumps(
+            {
+                "recommend": chosen_type,
+                "distance_km": total_distance_km,
+                "warnings": warnings,
+            },
+            ensure_ascii=False,
+        ),
+        explanation=f"推荐使用{'无人机' if recommend_drone else '地面救护车'}执行本次调度。",
+    )
+    session.add(decision)
+    session.commit()
 
     return {
+        "task_id": task.id,
         "resource_id": request.resource_id,
         "recommend": recommend_drone,
-        "path": path, # 这里返回的是真实的路径点
+        "path": path,  # 这里返回的是真实的路径点
         "warnings": warnings,
-
         # 完整信息
         "resource_info": resource,
         "analysis": [
@@ -291,3 +349,48 @@ def get_fleet():
         )
 
     return result
+
+
+# ================================
+#   调度任务查询接口
+# ================================
+
+@router.get("/tasks")
+def list_tasks(
+    status: Optional[str] = None,
+    session: Session = Depends(get_session),
+):
+    """
+    调度任务列表（简要信息，用于前端表格或日志列表）。
+    """
+    stmt = select(DispatchTask).order_by(DispatchTask.created_at.desc())
+    if status:
+        stmt = stmt.where(DispatchTask.status == status)
+    tasks = session.exec(stmt).all()
+    return tasks
+
+
+@router.get("/tasks/{task_id}")
+def get_task_detail(task_id: int, session: Session = Depends(get_session)):
+    """
+    调度任务详情：聚合任务本身 + 风险事件 + 决策日志。
+    """
+    task = session.get(DispatchTask, task_id)
+    if not task:
+        return {"error": "task not found"}
+
+    risks = session.exec(
+        select(RiskEvent).where(RiskEvent.task_id == task_id).order_by(RiskEvent.created_at)
+    ).all()
+
+    decisions = session.exec(
+        select(DecisionLog)
+        .where(DecisionLog.task_id == task_id)
+        .order_by(DecisionLog.created_at)
+    ).all()
+
+    return {
+        "task": task,
+        "risks": risks,
+        "decisions": decisions,
+    }
