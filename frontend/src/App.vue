@@ -37,23 +37,27 @@ const showPanels = ref(true)
 const showHospitals = ref(true)
 const showRoadNodes = ref(true)
 
+// 目标医院（用于每架飞机飞向不同医院）
+const hospitals = ref([])
+const selectedHospitalName = ref('')
+
 // 左上角“医疗资源应急调度台”中展示的 13 台载具（静态示例）
 const vehiclePanelList = ref([
   // 10 架城市无人机
-  { id: 'D-01', type: '无人机', battery: 92, status: '飞行中', position: { lon: 116.40, lat: 39.90 } },
-  { id: 'D-02', type: '无人机', battery: 88, status: '飞行中', position: { lon: 116.42, lat: 39.88 } },
-  { id: 'D-03', type: '无人机', battery: 76, status: '任务中', position: { lon: 116.38, lat: 39.92 } },
-  { id: 'D-04', type: '无人机', battery: 81, status: '待命', position: { lon: 116.44, lat: 39.86 } },
-  { id: 'D-05', type: '无人机', battery: 69, status: '返航中', position: { lon: 116.46, lat: 39.84 } },
-  { id: 'D-06', type: '无人机', battery: 97, status: '飞行中', position: { lon: 116.48, lat: 39.82 } },
-  { id: 'D-07', type: '无人机', battery: 63, status: '任务中', position: { lon: 116.37, lat: 39.91 } },
-  { id: 'D-08', type: '无人机', battery: 58, status: '充电中', position: { lon: 116.49, lat: 39.89 } },
-  { id: 'D-09', type: '无人机', battery: 84, status: '待命', position: { lon: 116.41, lat: 39.87 } },
-  { id: 'D-10', type: '无人机', battery: 91, status: '飞行中', position: { lon: 116.43, lat: 39.93 } },
+  { id: 'D-01', type: '无人机', battery: 92, status: '飞行中', startNode: '西直门桥', position: { lon: 116.40, lat: 39.90 } },
+  { id: 'D-02', type: '无人机', battery: 88, status: '飞行中', startNode: '北展桥', position: { lon: 116.42, lat: 39.88 } },
+  { id: 'D-03', type: '无人机', battery: 76, status: '任务中', startNode: '复兴门桥', position: { lon: 116.38, lat: 39.92 } },
+  { id: 'D-04', type: '无人机', battery: 81, status: '待命', startNode: '建国门桥', position: { lon: 116.44, lat: 39.86 } },
+  { id: 'D-05', type: '无人机', battery: 69, status: '返航中', startNode: '东直门桥', position: { lon: 116.46, lat: 39.84 } },
+  { id: 'D-06', type: '无人机', battery: 97, status: '飞行中', startNode: '西直门桥', position: { lon: 116.48, lat: 39.82 } },
+  { id: 'D-07', type: '无人机', battery: 63, status: '任务中', startNode: '北展桥', position: { lon: 116.37, lat: 39.91 } },
+  { id: 'D-08', type: '无人机', battery: 58, status: '充电中', startNode: '复兴门桥', position: { lon: 116.49, lat: 39.89 } },
+  { id: 'D-09', type: '无人机', battery: 84, status: '待命', startNode: '建国门桥', position: { lon: 116.41, lat: 39.87 } },
+  { id: 'D-10', type: '无人机', battery: 91, status: '飞行中', startNode: '东直门桥', position: { lon: 116.43, lat: 39.93 } },
   // 3 台救护车
-  { id: 'A-01', type: '救护车', battery: 85, status: '行驶中', position: { lon: 116.40, lat: 39.90 } },
-  { id: 'A-02', type: '救护车', battery: 72, status: '待命', position: { lon: 116.50, lat: 39.80 } },
-  { id: 'A-03', type: '救护车', battery: 91, status: '任务中', position: { lon: 116.30, lat: 39.70 } },
+  { id: 'A-01', type: '救护车', battery: 85, status: '行驶中', startNode: '西直门桥', position: { lon: 116.40, lat: 39.90 } },
+  { id: 'A-02', type: '救护车', battery: 72, status: '待命', startNode: '复兴门桥', position: { lon: 116.50, lat: 39.80 } },
+  { id: 'A-03', type: '救护车', battery: 91, status: '任务中', startNode: '建国门桥', position: { lon: 116.30, lat: 39.70 } },
 ])
 
 // 解构Cesium地图Hook的方法和响应式对象
@@ -96,13 +100,29 @@ const dispatchVehicle = (item) => {
     })
   }
 
-  // 触发一次真实“调度任务”（需要后端 /api/plan_route 正常运行）
+  // 触发一次真实“调度任务”（起点 = 各自 startNode，终点 = 选择的医院）
   const resource = selectedResource.value || resources.value?.[0]
   if (resource) {
-    bottomPanelRef.value?.logRef?.addLog('info', `关联物资调度: ${resource.name}`)
-    droneDispatch(resource)
+    const endNode = selectedHospitalName.value || '北京积水潭医院'
+    bottomPanelRef.value?.logRef?.addLog(
+      'info',
+      `关联物资调度: ${resource.name} | ${item.startNode} → ${endNode}`
+    )
+    droneDispatch(resource, { startNode: item.startNode, endNode })
   } else {
     bottomPanelRef.value?.logRef?.addLog('warn', '未加载到物资数据，无法发起路径规划调度')
+  }
+}
+
+const fetchHospitals = async () => {
+  try {
+    const res = await axios.get('http://127.0.0.1:8000/api/hospitals')
+    hospitals.value = res.data || []
+    if (!selectedHospitalName.value && hospitals.value.length > 0) {
+      selectedHospitalName.value = hospitals.value[0].name
+    }
+  } catch (e) {
+    console.error('医院数据请求失败，请检查接口服务是否正常', e)
   }
 }
 
@@ -225,6 +245,8 @@ onMounted(() => {
   initMap('cesiumContainer')
   // 获取资源数据
   fetchResources()
+  // 获取医院数据（用于目标选择）
+  fetchHospitals()
   // 监听来自深层组件的系统报警事件
   window.addEventListener('system-alarm', handleSystemAlarm)
 })
@@ -305,6 +327,17 @@ onBeforeUnmount(() => {
     <div class="ui-layer">
       <div class="left-panel">
         <PanelBox title="医疗资源应急调度台">
+          <div style="margin-bottom:10px; display:flex; gap:8px; align-items:center;">
+            <span style="color: rgba(255,255,255,0.7); font-size:12px;">目标医院</span>
+            <select
+              v-model="selectedHospitalName"
+              style="flex:1; background:rgba(0,0,0,0.4); color:#fff; border:1px solid rgba(0,210,255,0.3); border-radius:4px; padding:6px 8px; font-size:12px;"
+            >
+              <option v-for="h in hospitals" :key="h.name" :value="h.name">
+                {{ h.name }}
+              </option>
+            </select>
+          </div>
           <div class="vehicle-list">
             <div 
               v-for="item in vehiclePanelList" 

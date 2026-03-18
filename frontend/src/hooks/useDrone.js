@@ -77,16 +77,18 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // ================= 无人机调度核心方法 =================
 
-  // 调度无人机/车辆执行配送任务（入参为待配送资源）
-  const dispatch = async (resource) => {
+  // 调度无人机/车辆执行配送任务（入参为待配送资源 + 起终点节点名）
+  // startNode/endNode 建议传 road_nodes.json 中的 name；也可传医院名，由后端做吸附
+  const dispatch = async (resource, options = {}) => {
     try {
+      const startNode = options.startNode || '西直门桥'
+      const endNode = options.endNode || '东直门桥'
+
       // 调用后端路径规划接口，获取配送方式推荐（无人机/车辆）
       const res = await axios.post('http://127.0.0.1:8000/api/plan_route', {
         resource_id: resource.id,
-        // 这里必须传「路网节点」里存在的名字，才能算出路径
-        // 对应 backend/data/road_nodes.json 里的 name 字段
-        start_node: '西直门桥',
-        end_node: '东直门桥',
+        start_node: startNode,
+        end_node: endNode,
       })
 
       const result = res.data

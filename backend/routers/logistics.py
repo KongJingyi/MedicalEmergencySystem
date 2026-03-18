@@ -6,7 +6,7 @@ import math
 import time
 
 from database import get_session
-from models import MedicalResource, RouteRequest, DispatchTask, RiskEvent, DecisionLog
+from models import MedicalResource, RouteRequest, Hospital, DispatchTask, RiskEvent, DecisionLog
 from algorithms import (
     calculate_medical_score,
     compute_route,
@@ -28,6 +28,62 @@ LOCATION_MAPPING = {
     "START": "西直门桥",            # 兼容测试
     "END": "德胜门桥"               # 兼容测试
 }
+
+
+# ================================
+#   医院名/坐标 -> 最近路网节点吸附
+# ================================
+
+_ROAD_NODES_CACHE: Optional[List[Dict]] = None
+
+
+def _load_road_nodes() -> List[Dict]:
+    global _ROAD_NODES_CACHE
+    if _ROAD_NODES_CACHE is not None:
+        return _ROAD_NODES_CACHE
+    try:
+        with open("data/road_nodes.json", "r", encoding="utf-8") as f:
+            _ROAD_NODES_CACHE = json.load(f)
+    except Exception:
+        _ROAD_NODES_CACHE = []
+    return _ROAD_NODES_CACHE
+
+
+def _nearest_road_node_name(lng: float, lat: float) -> Optional[str]:
+    nodes = _load_road_nodes()
+    if not nodes:
+        return None
+    best_name = None
+    best_d = float("inf")
+    for n in nodes:
+        d = _haversine_distance_m(lng, lat, float(n["lng"]), float(n["lat"]))
+        if d < best_d:
+            best_d = d
+            best_name = n["name"]
+    return best_name
+
+
+def _resolve_to_road_node(name: str, session: Session) -> str:
+    """
+    将传入的业务名称解析为 road_nodes.json 中存在的节点名：
+    - 优先走 LOCATION_MAPPING
+    - 再尝试把 name 当作医院名，从 Hospital 表查坐标并吸附最近路网节点
+    - 最后返回原名（由 compute_route 决定是否可用）
+    """
+    mapped = LOCATION_MAPPING.get(name, name)
+
+    # 如果映射后与原名不同，优先返回映射结果
+    if mapped != name:
+        return mapped
+
+    # 尝试按医院名查坐标并吸附最近路网节点
+    hosp = session.exec(select(Hospital).where(Hospital.name == name)).first()
+    if hosp:
+        nearest = _nearest_road_node_name(hosp.lng, hosp.lat)
+        if nearest:
+            return nearest
+
+    return name
 
 
 # ================================
@@ -152,10 +208,9 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     # 2. 顶层推荐方案（True = 推荐无人机）
     recommend_drone = drone_result["score"] > ambulance_result["score"]
 
-    # 3. 🔥【关键修改】处理起终点映射
-    # 如果前端传来的名字在映射表里，就用映射后的；如果不在，就尝试直接用原名
-    real_start = LOCATION_MAPPING.get(request.start_node, request.start_node)
-    real_end = LOCATION_MAPPING.get(request.end_node, request.end_node)
+    # 3. 起终点解析：业务名/医院名 -> 路网节点名（必要时做最近节点吸附）
+    real_start = _resolve_to_road_node(request.start_node, session)
+    real_end = _resolve_to_road_node(request.end_node, session)
 
     print(f"🗺️ 路径规划: {request.start_node}({real_start}) -> {request.end_node}({real_end})")
 
