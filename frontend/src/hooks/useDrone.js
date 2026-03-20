@@ -79,10 +79,29 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // 调度无人机/车辆执行配送任务（入参为待配送资源 + 起终点节点名）
   // startNode/endNode 建议传 road_nodes.json 中的 name；也可传医院名，由后端做吸附
-  const dispatch = async (resource, options = {}) => {
+  // 🌟 兼容两种入参写法：
+  // 1) dispatch(resource, { startNode, endNode })
+  // 2) dispatch(resource, startNode, endNode)
+  const dispatch = async (resource, startNodeOrOptions, endNodeMaybe) => {
+    let startNode = '西直门桥'
+    let endNode = '北京积水潭医院'
+
+    if (
+      startNodeOrOptions &&
+      typeof startNodeOrOptions === 'object' &&
+      !Array.isArray(startNodeOrOptions)
+    ) {
+      // 写法 1：对象解构
+      startNode = startNodeOrOptions.startNode ?? startNode
+      endNode = startNodeOrOptions.endNode ?? endNode
+    } else {
+      // 写法 2：两个字符串
+      startNode = startNodeOrOptions ?? startNode
+      endNode = endNodeMaybe ?? endNode
+    }
+
     try {
-      const startNode = options.startNode || '西直门桥'
-      const endNode = options.endNode || '东直门桥'
+      console.log(`🚀 发起请求: 起点=${startNode}, 终点=${endNode}`)
 
       // 调用后端路径规划接口，获取配送方式推荐（无人机/车辆）
       const res = await axios.post('http://127.0.0.1:8000/api/plan_route', {

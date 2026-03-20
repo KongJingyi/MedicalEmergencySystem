@@ -82,7 +82,13 @@ const { playClick, playRadar, playWarning, stopWarning } = useAudio()
 const dispatch = async (resource) => {
   playClick()
   bottomPanelRef.value?.logRef?.addLog('info', `调度指令下达: ${resource.name}`)
-  await droneDispatch(resource)
+  const startNode = vehiclePanelList.value?.[0]?.startNode || '西直门桥'
+  const endNode = selectedHospitalName.value || '北京积水潭医院'
+  bottomPanelRef.value?.logRef?.addLog(
+    'info',
+    `调度路径: ${startNode} → ${endNode}`
+  )
+  await droneDispatch(resource, { startNode, endNode })
 }
 
 // 载具调度（左上角 13 台载具列表使用）：镜头飞到对应载具位置
