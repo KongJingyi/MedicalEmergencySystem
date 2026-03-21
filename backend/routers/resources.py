@@ -33,6 +33,43 @@ def get_road_nodes(session: Session = Depends(get_session)):
     return session.exec(select(RoadNode)).all()
 
 
+@router.get("/hospital_needs")
+def get_hospital_needs(session: Session = Depends(get_session)):
+    """
+    获取医院-物资缺口矩阵：
+    {
+      "医院A": {"物资1": 12, "物资2": 5},
+      "医院B": {"物资1": 3, "物资2": 9}
+    }
+    """
+    hospitals = session.exec(select(Hospital)).all()
+    resources = session.exec(select(MedicalResource)).all()
+
+    if not hospitals or not resources:
+        return {}
+
+    # 选取部分重点物资作为缺口看板条目（避免一次返回过大）
+    sorted_resources = sorted(
+        resources,
+        key=lambda r: ((getattr(r, "priority", 3) or 3), (getattr(r, "urgency_level", 3) or 3)),
+        reverse=True,
+    )
+    top_resources = sorted_resources[:4] if len(sorted_resources) > 4 else sorted_resources
+
+    result = {}
+    for idx, hospital in enumerate(hospitals):
+        needs = {}
+        for j, resource in enumerate(top_resources):
+            stock = max(0, int(getattr(resource, "stock", 0) or 0))
+            # 一个稳定的演示缺口估算：库存越低缺口越大，并按医院做轻微差异化
+            baseline = max(5, 120 - stock * 2)
+            wave = ((idx + 1) * (j + 2) * 7) % 21
+            needs[resource.name] = int(baseline + wave)
+        result[hospital.name] = needs
+
+    return result
+
+
 @router.post("/seed")
 def seed_demo_data(session: Session = Depends(get_session)):
     """

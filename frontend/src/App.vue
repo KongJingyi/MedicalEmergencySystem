@@ -38,17 +38,43 @@ const selectedEndNode = ref('') // 目标医院
 const selectedResource = ref(null) // 调拨物资
 const dispatchQuantity = ref(10) // 派发数量
 
-// 2. 模拟：全市各医院实时物资缺口
-const hospitalNeeds = reactive({
-  '北京积水潭医院': { 'O型血': 106, 'mRNA疫苗': 123, '强心剂': 67, '防护服': 29 },
-  '北京大学人民医院': { 'O型血': 85, 'mRNA疫苗': 50, '强心剂': 120, '防护服': 200 },
-  '北京协和医院': { 'O型血': 210, 'mRNA疫苗': 300, '强心剂': 50, '防护服': 150 }
-})
+const hospitalNeeds = ref({})
 
 const currentNeeds = computed(() => {
-  if (!selectedEndNode.value) return {}
-  return hospitalNeeds[selectedEndNode.value] || {}
+  if (!selectedEndNode.value || !hospitalNeeds.value) return {}
+  return hospitalNeeds.value[selectedEndNode.value] || {}
 })
+
+// 🌟 拉取后端物资缺口数据 (如果你后端还没写好接口，就先用这个完美匹配 JSON 的备用数据)
+const fetchHospitalNeeds = async () => {
+  try {
+    const res = await axios.get('http://127.0.0.1:8000/api/hospital_needs')
+    hospitalNeeds.value = res.data
+  } catch (e) {
+    console.log('未连接实时缺口接口，使用本地完美映射的演示数据')
+    // 🚨 核心修改：这里的 Key 必须和 resources.json 里的 name 一字不差！
+    hospitalNeeds.value = {
+      '北京积水潭医院': {
+        'RhD阴性O型红细胞悬液（稀有血型/冷链）': 15,
+        'ECMO一次性耗材包（紧急体外循环/高价值）': 2,
+        '破伤风人免疫球蛋白TIG（外伤暴露/急）': 30,
+        '急诊手术缝合包（无菌/手术耗材）': 120,
+      },
+      '北京大学人民医院': {
+        '去甲肾上腺素注射液（升压/抢救）': 50,
+        '人白蛋白 20%（扩容/肝衰/稀缺）': 20,
+        '冷沉淀（Cryoprecipitate，凝血因子/冷链）': 10,
+        '甲型流感抗病毒药奥司他韦（流行季/急需）': 80,
+      },
+      '北京协和医院': {
+        'mRNA疫苗（-80℃超低温/冷链）': 200,
+        '狂犬病免疫球蛋白RIG（暴露后急需/冷链）': 15,
+        '主动脉球囊反搏IABP耗材包（心源性休克/急）': 3,
+        '重组组织型纤溶酶原激活剂rt-PA（卒中溶栓/急）': 8,
+      },
+    }
+  }
+}
 
 const startNodes = ['西直门桥', '北展桥', '复兴门桥', '建国门桥', '东直门桥', '德胜门桥']
 
@@ -137,8 +163,8 @@ const executeDispatch = async (vehicle, startNode) => {
     })
 
     // 动态扣减医院缺口数据
-    if (hospitalNeeds[target] && hospitalNeeds[target][resName] !== undefined) {
-      hospitalNeeds[target][resName] = Math.max(0, hospitalNeeds[target][resName] - qty)
+    if (hospitalNeeds.value[target] && hospitalNeeds.value[target][resName] !== undefined) {
+      hospitalNeeds.value[target][resName] = Math.max(0, hospitalNeeds.value[target][resName] - qty)
       bottomPanelRef.value?.logRef?.addLog('info', `✅ [调度成功] ${vehicle.id} 已发车，${target} 缺口扣减: ${resName} -${qty}`)
     }
   } catch (e) {
@@ -190,6 +216,7 @@ onMounted(() => {
   initMap('cesiumContainer')
   fetchResources()
   fetchHospitals()
+  fetchHospitalNeeds()
   window.addEventListener('system-alarm', handleSystemAlarm)
 })
 onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemAlarm) })
@@ -208,7 +235,10 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
   </button>
 
   <div v-if="showPanels">
-    <Dashboard :hospitalPressure="hospitalPressure" :needsData="hospitalNeeds" />
+    <Dashboard
+      :hospitalName="selectedEndNode"
+      :needsData="currentNeeds"
+    />
 
     <DroneCam v-if="showCamera && activeDroneEntity && viewerRef" :mainViewer="viewerRef" :vehicle="activeDroneEntity" @close="closeCamera" />
 
