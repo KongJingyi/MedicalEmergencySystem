@@ -1,13 +1,11 @@
 <script setup>
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref, reactive, computed } from 'vue'
 import axios from 'axios'
 import * as Cesium from 'cesium'
 import Dashboard from './components/Dashboard.vue'
 import DroneCam from './components/DroneCam.vue'
 import PanelBox from './components/ui/PanelBox.vue'
-import ResourceRadar from './components/charts/ResourceRadar.vue'
 import LoadingScreen from './components/ui/LoadingScreen.vue'
-import FleetList from './components/FleetList.vue'
 import ViewSwitch from './components/ViewSwitch.vue'
 import HUDOverlay from './components/HUDOverlay.vue'
 import AlarmModal from './components/AlarmModal.vue'
@@ -18,249 +16,183 @@ import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
 import { useAudio } from './hooks/useAudio'
 
-// 资源 / 载具列表数据（后端接口获取 or 本地配置）
 const resources = ref([])
-// 医院压力值（用于无人机调度决策）
+const hospitals = ref([])
 const hospitalPressure = ref(0)
-const selectedResource = ref(null)
-const logRef = ref(null)
 const bottomPanelRef = ref(null)
 const viewMode = ref('2d')
+const showPanels = ref(true)
+const showHospitals = ref(true)
+const showRoadNodes = ref(true)
+
 const alarmVisible = ref(false)
 const alarmMessage = ref('')
 const alarmType = ref('')
 const alarmBatteryLevel = ref(null)
 const alarmTimestamp = ref('')
-// 是否显示所有 UI 控制面板
-const showPanels = ref(true)
-// 图层开关状态
-const showHospitals = ref(true)
-const showRoadNodes = ref(true)
 
-// 目标医院（用于每架飞机飞向不同医院）
-const hospitals = ref([])
-const selectedHospitalName = ref('')
+// ================= 🌟 业务闭环核心状态 =================
+// 1. 表单双向绑定
+const selectedStartNode = ref('西直门桥') // 默认发货仓
+const selectedEndNode = ref('') // 目标医院
+const selectedResource = ref(null) // 调拨物资
+const dispatchQuantity = ref(10) // 派发数量
 
-// 左上角“医疗资源应急调度台”中展示的 13 台载具
-const vehiclePanelList = ref([
-  // 10 架城市无人机
-  { id: 'D-01', type: '无人机', battery: 92, status: '飞行中', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
-  { id: 'D-02', type: '无人机', battery: 88, status: '飞行中', startNode: '北展桥', position: { lon: 116.3427, lat: 39.9387 } },
+// 2. 模拟：全市各医院实时物资缺口
+const hospitalNeeds = reactive({
+  '北京积水潭医院': { 'O型血': 106, 'mRNA疫苗': 123, '强心剂': 67, '防护服': 29 },
+  '北京大学人民医院': { 'O型血': 85, 'mRNA疫苗': 50, '强心剂': 120, '防护服': 200 },
+  '北京协和医院': { 'O型血': 210, 'mRNA疫苗': 300, '强心剂': 50, '防护服': 150 }
+})
+
+const currentNeeds = computed(() => {
+  if (!selectedEndNode.value) return {}
+  return hospitalNeeds[selectedEndNode.value] || {}
+})
+
+const startNodes = ['西直门桥', '北展桥', '复兴门桥', '建国门桥', '东直门桥', '德胜门桥']
+
+// ================= 🌟 机队指挥中心状态 =================
+// 使用 reactive 让状态可变，真实模拟机队
+const fleetList = reactive([
+  { id: 'D-01', type: '无人机', battery: 100, status: '待命', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
+  { id: 'D-02', type: '无人机', battery: 98, status: '待命', startNode: '北展桥', position: { lon: 116.3427, lat: 39.9387 } },
   { id: 'D-03', type: '无人机', battery: 76, status: '任务中', startNode: '复兴门桥', position: { lon: 116.3566, lat: 39.9071 } },
-  { id: 'D-04', type: '无人机', battery: 81, status: '待命', startNode: '建国门桥', position: { lon: 116.4363, lat: 39.9089 } },
+  { id: 'D-04', type: '无人机', battery: 100, status: '待命', startNode: '建国门桥', position: { lon: 116.4363, lat: 39.9089 } },
   { id: 'D-05', type: '无人机', battery: 69, status: '返航中', startNode: '东直门桥', position: { lon: 116.4339, lat: 39.9408 } },
-  { id: 'D-06', type: '无人机', battery: 97, status: '飞行中', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
-  { id: 'D-07', type: '无人机', battery: 63, status: '任务中', startNode: '北展桥', position: { lon: 116.3427, lat: 39.9387 } },
-  { id: 'D-08', type: '无人机', battery: 58, status: '充电中', startNode: '复兴门桥', position: { lon: 116.3566, lat: 39.9071 } },
-  { id: 'D-09', type: '无人机', battery: 84, status: '待命', startNode: '建国门桥', position: { lon: 116.4363, lat: 39.9089 } },
-  { id: 'D-10', type: '无人机', battery: 91, status: '飞行中', startNode: '东直门桥', position: { lon: 116.4339, lat: 39.9408 } },
-  
-  // 3 台救护车
-  { id: 'A-01', type: '救护车', battery: 85, status: '行驶中', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
-  { id: 'A-02', type: '救护车', battery: 72, status: '待命', startNode: '复兴门桥', position: { lon: 116.3566, lat: 39.9071 } },
-  { id: 'A-03', type: '救护车', battery: 91, status: '任务中', startNode: '建国门桥', position: { lon: 116.4363, lat: 39.9089 } },
+  { id: 'A-01', type: '救护车', battery: 100, status: '待命', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
+  { id: 'A-02', type: '救护车', battery: 85, status: '任务中', startNode: '复兴门桥', position: { lon: 116.3566, lat: 39.9071 } },
 ])
 
-// 解构Cesium地图Hook的方法和响应式对象
-const { viewerRef, initMap, toggleLayer } = useCesiumMap()
+// 自动计算统计数据
+const fleetStats = computed(() => {
+  const total = fleetList.length;
+  const idle = fleetList.filter(v => v.status === '待命').length;
+  const active = total - idle;
+  return { total, idle, active };
+})
 
-// 解构无人机Hook的方法和响应式对象，传入地图实例和医院压力值
+const { viewerRef, initMap, toggleLayer } = useCesiumMap()
 const {
   activeDroneEntity,
   dispatch: droneDispatch,
   showCamera,
-  viewVehicle,
   closeCamera,
   changeWeather,
   telemetry,
   routeProfile,
+  viewVehicle,
+  unlockCamera,
 } = useDrone(viewerRef, hospitalPressure)
-
-// 解构音频Hook的方法
 const { playClick, playRadar, playWarning, stopWarning } = useAudio()
 
-// 包一层，增加系统日志
-const dispatch = async (resource) => {
+
+// ================= 🌟 调度方案一：AI 智能分配 =================
+const handleAIDispatch = async () => {
   playClick()
-  bottomPanelRef.value?.logRef?.addLog('info', `调度指令下达: ${resource.name}`)
-  const startNode = vehiclePanelList.value?.[0]?.startNode || '西直门桥'
-  const endNode = selectedHospitalName.value || '北京积水潭医院'
-  bottomPanelRef.value?.logRef?.addLog(
-    'info',
-    `调度路径: ${startNode} → ${endNode}`
-  )
-  await droneDispatch(resource, { startNode, endNode })
+  if (!selectedResource.value || !selectedEndNode.value) return alert("请先选择调拨物资和目标医院！")
+
+  // 1. 寻找第一架“待命”的无人机或车辆
+  const availableVehicle = fleetList.find(v => v.status === '待命')
+  if (!availableVehicle) {
+    bottomPanelRef.value?.logRef?.addLog('warn', `🚨 警告：当前全市无可用运力！请等待载具返航。`)
+    alert("当前无可用运力，请稍后再试！")
+    return
+  }
+
+  bottomPanelRef.value?.logRef?.addLog('info', `[AI 统管] 系统已自动分配 ${availableVehicle.id} 执行任务。`)
+  
+  // 执行具体的调度扣减逻辑
+  executeDispatch(availableVehicle, selectedStartNode.value)
 }
 
-// 载具调度（左上角 13 台载具列表使用）：镜头飞到对应载具位置
-const dispatchVehicle = (item) => {
+// ================= 🌟 调度方案二：人工强制派单 =================
+const handleManualDispatch = (vehicle) => {
   playClick()
-  bottomPanelRef.value?.logRef?.addLog('info', `调度载具: ${item.id} (${item.type})`)
-  if (item.position && viewerRef.value) {
-    viewerRef.value.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        item.position.lon,
-        item.position.lat,
-        item.type === '无人机' ? 800 : 500
-      ),
-      duration: 2,
-    })
-  }
+  if (vehicle.status !== '待命') return alert("该载具正在执行任务或充电中，无法派单！")
+  if (!selectedResource.value || !selectedEndNode.value) return alert("请在上方表单中配置好收货医院和物资！")
 
-  // 触发一次真实“调度任务”（起点 = 各自 startNode，终点 = 选择的医院）
-  const resource = selectedResource.value || resources.value?.[0]
-  if (resource) {
-    const endNode = selectedHospitalName.value || '北京积水潭医院'
-    bottomPanelRef.value?.logRef?.addLog(
-      'info',
-      `关联物资调度: ${resource.name} | ${item.startNode} → ${endNode}`
-    )
-    droneDispatch(resource, { startNode: item.startNode, endNode })
-  } else {
-    bottomPanelRef.value?.logRef?.addLog('warn', '未加载到物资数据，无法发起路径规划调度')
+  bottomPanelRef.value?.logRef?.addLog('info', `[人工微操] 指挥员强制派单给 ${vehicle.id}。`)
+  
+  // 强制使用该载具的驻扎点作为起点
+  executeDispatch(vehicle, vehicle.startNode)
+}
+
+// ================= 核心执行器 =================
+const executeDispatch = async (vehicle, startNode) => {
+  const resName = selectedResource.value.name
+  const target = selectedEndNode.value
+  const qty = dispatchQuantity.value
+  const forcedType = vehicle.type === '无人机' ? 'DRONE' : 'AMBULANCE'
+
+  try {
+    // 锁定载具状态
+    vehicle.status = '任务中'
+
+    // 调用底层渲染
+    await droneDispatch(selectedResource.value, { 
+      startNode: startNode, 
+      endNode: target,
+      forcedType: forcedType
+    })
+
+    // 动态扣减医院缺口数据
+    if (hospitalNeeds[target] && hospitalNeeds[target][resName] !== undefined) {
+      hospitalNeeds[target][resName] = Math.max(0, hospitalNeeds[target][resName] - qty)
+      bottomPanelRef.value?.logRef?.addLog('info', `✅ [调度成功] ${vehicle.id} 已发车，${target} 缺口扣减: ${resName} -${qty}`)
+    }
+  } catch (e) {
+    vehicle.status = '待命' // 失败回滚
+    bottomPanelRef.value?.logRef?.addLog('warn', `❌ 调度失败: ${e.message}`)
   }
+}
+
+// 仅用于镜头跟踪
+const trackVehicle = (item) => {
+  playClick()
+  bottomPanelRef.value?.logRef?.addLog('info', `视角锁定至载具: ${item.id}`)
+  viewVehicle(item.id)
 }
 
 const fetchHospitals = async () => {
   try {
     const res = await axios.get('http://127.0.0.1:8000/api/hospitals')
     hospitals.value = res.data || []
-    if (!selectedHospitalName.value && hospitals.value.length > 0) {
-      selectedHospitalName.value = hospitals.value[0].name
+    if (!selectedEndNode.value && hospitals.value.length > 0) {
+      selectedEndNode.value = hospitals.value[0].name
     }
-  } catch (e) {
-    console.error('医院数据请求失败，请检查接口服务是否正常', e)
-  }
+  } catch (e) { console.error('医院数据请求失败', e) }
 }
 
-// 从后端接口获取资源列表数据
 const fetchResources = async () => {
   try {
     const res = await axios.get('http://127.0.0.1:8000/api/resources')
     playRadar()
     resources.value = res.data
-    if (!selectedResource.value && resources.value && resources.value.length > 0) {
+    if (!selectedResource.value && resources.value.length > 0) {
       selectedResource.value = resources.value[0]
     }
-  } catch (e) {
-    console.error('资源列表数据请求失败，请检查接口服务是否正常', e)
-  }
+  } catch (e) { console.error('资源请求失败', e) }
 }
 
-// 触发报警
 const triggerAlarm = (message, type, batteryLevel = null) => {
-  alarmMessage.value = message
-  alarmType.value = type
-  alarmBatteryLevel.value = batteryLevel
-  alarmTimestamp.value = new Date().toLocaleTimeString('zh-CN', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
-  alarmVisible.value = true
-  playWarning()
-  bottomPanelRef.value?.logRef?.addLog('warn', `警报触发: ${message}`)
+  alarmMessage.value = message; alarmType.value = type; alarmBatteryLevel.value = batteryLevel;
+  alarmTimestamp.value = new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  alarmVisible.value = true; playWarning(); bottomPanelRef.value?.logRef?.addLog('warn', `警报: ${message}`)
 }
-
-// 确认报警
-const confirmAlarm = () => {
-  stopWarning()
-  alarmVisible.value = false
-  bottomPanelRef.value?.logRef?.addLog('info', '警报已确认')
-}
-
-// 忽略报警
-const dismissAlarm = () => {
-  stopWarning()
-  alarmVisible.value = false
-  bottomPanelRef.value?.logRef?.addLog('warn', '警报已忽略')
-}
-
-const selectResource = (item) => {
-  playClick()
-  selectedResource.value = item
-}
-
-const selectFleet = (item) => {
-  playClick()
-  bottomPanelRef.value?.logRef?.addLog('info', `选中机队: ${item.id} (${item.type})`)
-  if (item.position && viewerRef.value) {
-    viewerRef.value.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(item.position.lon, item.position.lat, 500),
-      duration: 2
-    })
-  }
-}
-
-const handleViewChange = (mode) => {
-  viewMode.value = mode
-  bottomPanelRef.value?.logRef?.addLog(
-    'info',
-    `切换视图模式: ${mode === '2d' ? '全局视图' : '驾驶舱视图'}`
-  )
-
-  const viewer = viewerRef.value
-  if (!viewer) return
-
-  if (mode === '3d') {
-    // 恢复 3D 地球形态
-    viewer.scene.morphTo3D(1.0)
-
-    // 检查是否有活动的载具
-    if (activeDroneEntity.value) {
-      setTimeout(() => {
-        viewer.trackedEntity = activeDroneEntity.value
-        // 设置“驾驶舱”视角的后方偏移：此处用统一偏移
-        const offsetDist = -60
-        viewer.trackedEntity.viewFrom = new Cesium.Cartesian3(offsetDist, 0.0, 30.0)
-      }, 1200)
-    } else {
-      bottomPanelRef.value?.logRef?.addLog(
-        'warn',
-        '当前无执行任务的载具，无法进入跟随视角'
-      )
-    }
-  } else if (mode === '2d') {
-    // 彻底解除相机锁定
-    viewer.trackedEntity = undefined
-
-    // 切换到 2D 模式
-    viewer.scene.morphTo2D(1.0)
-
-    // 飞回城市大局观视角
-    setTimeout(() => {
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(116.363, 39.935, 120000),
-        duration: 1.5,
-      })
-    }, 1000)
-  }
-}
-
-const togglePanels = () => {
-  showPanels.value = !showPanels.value
-}
-
-const handleSystemAlarm = (e) => {
-  const detail = e.detail || {}
-  triggerAlarm(detail.message, detail.type, detail.batteryLevel)
-}
+const confirmAlarm = () => { stopWarning(); alarmVisible.value = false }
+const dismissAlarm = () => { stopWarning(); alarmVisible.value = false }
+const handleViewChange = (mode) => { viewMode.value = mode }
+const togglePanels = () => { showPanels.value = !showPanels.value }
+const handleSystemAlarm = (e) => { const d = e.detail || {}; triggerAlarm(d.message, d.type, d.batteryLevel) }
 
 onMounted(() => {
-  // 初始化Cesium地图容器
   initMap('cesiumContainer')
-  // 获取资源数据
   fetchResources()
-  // 获取医院数据（用于目标选择）
   fetchHospitals()
-  // 监听来自深层组件的系统报警事件
   window.addEventListener('system-alarm', handleSystemAlarm)
 })
-
-onBeforeUnmount(() => {
-  window.removeEventListener('system-alarm', handleSystemAlarm)
-})
+onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemAlarm) })
 </script>
 
 <template>
@@ -271,21 +203,14 @@ onBeforeUnmount(() => {
     <h2>无人机调度监控系统 - 医院资源调配可视化平台</h2>
   </div>
 
-  <!-- 面板总开关按钮（始终可见） -->
   <button class="ui-toggle-btn" @click="togglePanels">
     {{ showPanels ? '隐藏面板' : '显示面板' }}
   </button>
 
-  <!-- 所有 UI 控制面板：可整体显示 / 隐藏 -->
   <div v-if="showPanels">
-    <Dashboard :hospitalPressure="hospitalPressure" />
+    <Dashboard :hospitalPressure="hospitalPressure" :needsData="hospitalNeeds" />
 
-    <DroneCam 
-      v-if="showCamera && activeDroneEntity && viewerRef" 
-      :mainViewer="viewerRef" 
-      :vehicle="activeDroneEntity" 
-      @close="closeCamera"
-    />
+    <DroneCam v-if="showCamera && activeDroneEntity && viewerRef" :mainViewer="viewerRef" :vehicle="activeDroneEntity" @close="closeCamera" />
 
     <div class="weather-controls">
       <button @click="playClick(); changeWeather('sunny')" title="晴天">☀️</button>
@@ -295,77 +220,101 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="layer-controls">
-      <label class="layer-switch">
-        <input
-          type="checkbox"
-          v-model="showHospitals"
-          @change="toggleLayer('hospital', showHospitals)"
-        />
-        <span>医院图层</span>
-      </label>
-      <label class="layer-switch">
-        <input
-          type="checkbox"
-          v-model="showRoadNodes"
-          @change="toggleLayer('road', showRoadNodes)"
-        />
-        <span>路网节点</span>
-      </label>
+      <label class="layer-switch"><input type="checkbox" v-model="showHospitals" @change="toggleLayer('hospital', showHospitals)"/> <span>医院图层</span></label>
+      <label class="layer-switch"><input type="checkbox" v-model="showRoadNodes" @change="toggleLayer('road', showRoadNodes)"/> <span>路网节点</span></label>
     </div>
 
     <ViewSwitch @change="handleViewChange" />
-
-    <HUDOverlay
-      :visible="viewMode === '3d' && showCamera"
-      :telemetry="telemetry"
-      :pathData="routeProfile"
-    />
-
-    <AlarmModal 
-      :visible="alarmVisible"
-      :message="alarmMessage"
-      :type="alarmType"
-      :batteryLevel="alarmBatteryLevel"
-      :timestamp="alarmTimestamp"
-      @confirm="confirmAlarm"
-      @dismiss="dismissAlarm"
-    />
+    <button
+      v-if="activeDroneEntity"
+      class="unlock-view-btn"
+      @click="unlockCamera"
+    >
+      🌍 解除锁定 (恢复自由移动)
+    </button>
+    <HUDOverlay :visible="viewMode === '3d' && showCamera" :telemetry="telemetry" :pathData="routeProfile" />
+    <AlarmModal :visible="alarmVisible" :message="alarmMessage" :type="alarmType" :batteryLevel="alarmBatteryLevel" :timestamp="alarmTimestamp" @confirm="confirmAlarm" @dismiss="dismissAlarm" />
 
     <div class="ui-layer">
       <div class="left-panel">
-        <PanelBox title="医疗资源应急调度台">
-          <div style="margin-bottom:10px; display:flex; gap:8px; align-items:center;">
-            <span style="color: rgba(255,255,255,0.7); font-size:12px;">目标医院</span>
-            <select
-              v-model="selectedHospitalName"
-              style="flex:1; background:rgba(0,0,0,0.4); color:#fff; border:1px solid rgba(0,210,255,0.3); border-radius:4px; padding:6px 8px; font-size:12px;"
-            >
-              <option v-for="h in hospitals" :key="h.name" :value="h.name">
-                {{ h.name }}
-              </option>
-            </select>
+        
+        <PanelBox title="🚑 应急物资调拨指令台">
+          <div class="dispatch-form">
+            <div class="form-row">
+              <span class="label">起点仓</span>
+              <select v-model="selectedStartNode" class="cyber-select">
+                <option v-for="node in startNodes" :key="node" :value="node">{{ node }}</option>
+              </select>
+            </div>
+            
+            <div class="form-row">
+              <span class="label">目标院</span>
+              <select v-model="selectedEndNode" class="cyber-select">
+                <option v-for="h in hospitals" :key="h.name" :value="h.name">{{ h.name }}</option>
+              </select>
+            </div>
+
+            <div class="form-row">
+              <span class="label">发物资</span>
+              <select v-model="selectedResource" class="cyber-select">
+                <option v-for="r in resources" :key="r.id" :value="r">{{ r.name }}</option>
+              </select>
+            </div>
+
+            <div class="form-row">
+              <span class="label">下发量</span>
+              <input type="number" v-model="dispatchQuantity" class="cyber-input" min="1" max="500">
+            </div>
+
+            <div v-if="selectedResource" class="needs-hint">
+              当前 {{ selectedEndNode }} 缺口: 
+              <span class="highlight">{{ currentNeeds[selectedResource.name] || 0 }}</span>
+            </div>
+
+            <button class="mega-dispatch-btn" @click="handleAIDispatch">
+              🚀 AI 智能匹配可用运力发货
+            </button>
           </div>
+        </PanelBox>
+        
+        <PanelBox title="📡 机队指挥中心">
+          <div class="fleet-stats">
+            <div class="stat-box">
+              <span class="num blue">{{ fleetStats.total }}</span>
+              <span class="text">总运力</span>
+            </div>
+            <div class="stat-box">
+              <span class="num green">{{ fleetStats.idle }}</span>
+              <span class="text">待命可用</span>
+            </div>
+            <div class="stat-box">
+              <span class="num red">{{ fleetStats.active }}</span>
+              <span class="text">执行任务</span>
+            </div>
+          </div>
+
           <div class="vehicle-list">
-            <div 
-              v-for="item in vehiclePanelList" 
-              :key="item.id"
-              class="resource-item"
-            >
+            <div v-for="item in fleetList" :key="item.id" class="resource-item" :class="{ 'is-busy': item.status !== '待命' }">
               <div class="info">
                 <div class="name">[{{ item.type }}] {{ item.id }}</div>
                 <div class="details">
-                  <span class="detail">电量: {{ item.battery }}%</span>
-                  <span class="detail">状态: {{ item.status }}</span>
+                  <span class="detail" :class="{'low-battery': item.battery < 30}">电量: {{ item.battery }}%</span>
+                  <span class="detail status" :class="{'ready': item.status === '待命'}">{{ item.status }}</span>
                 </div>
               </div>
               <div class="btn-group">
-                <button @click.stop="dispatchVehicle(item)" class="dispatch-btn">调度</button>
+                <button @click.stop="trackVehicle(item)" class="track-btn">视角</button>
+                <button 
+                  @click.stop="handleManualDispatch(item)" 
+                  class="manual-dispatch-btn"
+                  :disabled="item.status !== '待命'">
+                  人工派单
+                </button>
               </div>
             </div>
           </div>
         </PanelBox>
-        
-        <FleetList @select="selectFleet" />
+
       </div>
 
       <div class="bottom-panel">
@@ -377,247 +326,95 @@ onBeforeUnmount(() => {
 
 <style scoped>
 #cesiumContainer { width: 100vw; height: 100vh; }
-.header-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 60px;
-  background: linear-gradient(to bottom, rgba(0,0,0,0.9), rgba(0,0,0,0));
-  z-index: 1000;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-.header-bar h2 {
-  color: var(--neon-blue);
-  font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif;
-  text-shadow: 0 0 10px var(--neon-blue);
-  letter-spacing: 2px;
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
+.header-bar { position: absolute; top: 0; left: 0; width: 100%; height: 60px; background: linear-gradient(to bottom, rgba(0,0,0,0.9), rgba(0,0,0,0)); z-index: 1000; display: flex; justify-content: center; align-items: center; }
+.header-bar h2 { color: var(--neon-blue); font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif; text-shadow: 0 0 10px var(--neon-blue); letter-spacing: 2px; margin: 0; font-size: 18px; font-weight: 600; }
+.ui-toggle-btn { position: absolute; top: 70px; right: 20px; z-index: 2000; background: rgba(0, 0, 0, 0.6); border: 1px solid var(--neon-blue); color: var(--neon-blue); padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+.ui-toggle-btn:hover { background: rgba(0, 210, 255, 0.25); box-shadow: 0 0 10px rgba(0, 210, 255, 0.5); }
+.weather-controls { position: absolute; top: 20px; right: 20px; z-index: 2000; display: flex; gap: 10px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color); width: 480px; justify-content: center; }
+.weather-controls button { background: transparent; border: 1px solid var(--border-color); font-size: 20px; cursor: pointer; transition: all 0.3s; border-radius: 4px; padding: 5px 10px; color: var(--text-primary); }
+.weather-controls button:hover { transform: scale(1.2); background: rgba(0, 210, 255, 0.2); border-color: var(--neon-blue); box-shadow: 0 0 10px rgba(0, 210, 255, 0.4); }
+.layer-controls { position: absolute; top: 80px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border-color); }
+.layer-switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-primary); }
 
-.ui-toggle-btn {
+/* ==== 模块一：派单表单样式 ==== */
+.dispatch-form { display: flex; flex-direction: column; gap: 12px; }
+.form-row { display: flex; align-items: center; gap: 10px; }
+.form-row .label { color: rgba(255,255,255,0.7); font-size: 13px; width: 50px; }
+.cyber-select, .cyber-input { flex: 1; background: rgba(0, 20, 40, 0.6); color: #00d2ff; border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 4px; padding: 6px 10px; font-size: 13px; outline: none; transition: border-color 0.3s; }
+.cyber-select:focus, .cyber-input:focus { border-color: #00d2ff; box-shadow: 0 0 8px rgba(0, 210, 255, 0.5); }
+.cyber-select option { background: #001220; color: #fff; }
+.needs-hint { font-size: 12px; color: rgba(255,255,255,0.6); text-align: right; margin-top: -6px; }
+.needs-hint .highlight { color: #ff4d4f; font-weight: bold; font-size: 14px; }
+.mega-dispatch-btn { margin-top: 10px; background: linear-gradient(90deg, rgba(0,210,255,0.2) 0%, rgba(0,210,255,0.6) 50%, rgba(0,210,255,0.2) 100%); border: 1px solid #00d2ff; color: #fff; padding: 12px; font-size: 14px; font-weight: bold; border-radius: 4px; cursor: pointer; text-shadow: 0 0 5px #00d2ff; box-shadow: 0 0 15px rgba(0, 210, 255, 0.3); transition: all 0.3s ease; }
+.mega-dispatch-btn:hover { background: rgba(0, 210, 255, 0.8); box-shadow: 0 0 25px rgba(0, 210, 255, 0.6); transform: scale(1.02); }
+
+/* ==== 模块二：机队指挥中心样式 ==== */
+.fleet-stats { display: flex; justify-content: space-around; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 10px 0; margin-bottom: 12px; }
+.stat-box { display: flex; flex-direction: column; align-items: center; }
+.stat-box .num { font-size: 20px; font-weight: bold; font-family: 'Orbitron', monospace; }
+.stat-box .text { font-size: 11px; color: rgba(255,255,255,0.6); margin-top: 4px; }
+.num.blue { color: #00d2ff; text-shadow: 0 0 8px #00d2ff; }
+.num.green { color: #00ffaa; text-shadow: 0 0 8px #00ffaa; }
+.num.red { color: #ff4d4f; text-shadow: 0 0 8px #ff4d4f; }
+
+.vehicle-list { max-height: 250px; overflow-y: auto; padding-right: 4px; }
+.vehicle-list::-webkit-scrollbar { width: 4px; }
+.vehicle-list::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.5); }
+.vehicle-list::-webkit-scrollbar-thumb { background: var(--neon-blue); border-radius: 2px; }
+
+.resource-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); margin-bottom: 6px; border-radius: 4px; transition: all 0.3s; }
+.resource-item:hover { background: rgba(0, 210, 255, 0.1); }
+.resource-item.is-busy { opacity: 0.7; }
+.resource-item .name { color: #fff; font-size: 13px; font-weight: bold; margin-bottom: 4px; }
+.resource-item .details { display: flex; gap: 10px; }
+.resource-item .detail { color: rgba(255,255,255,0.6); font-size: 11px; }
+.detail.low-battery { color: #ff4d4f; }
+.detail.status.ready { color: #00ffaa; }
+
+.btn-group { display: flex; gap: 6px; }
+.track-btn { background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: all 0.2s; }
+.track-btn:hover { background: rgba(255,255,255,0.2); }
+
+.manual-dispatch-btn { background: rgba(0, 210, 255, 0.15); border: 1px solid #00d2ff; color: #00d2ff; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; transition: all 0.2s; }
+.manual-dispatch-btn:hover:not(:disabled) { background: #00d2ff; color: #000; box-shadow: 0 0 10px rgba(0,210,255,0.5); }
+.manual-dispatch-btn:disabled { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: rgba(255,255,255,0.3); cursor: not-allowed; }
+
+/* ==== 解除锁定按钮样式 ==== */
+.unlock-view-btn {
   position: absolute;
-  top: 70px;
+  top: 130px;
   right: 20px;
   z-index: 2000;
-  background: rgba(0, 0, 0, 0.6);
-  border: 1px solid var(--neon-blue);
-  color: var(--neon-blue);
-  padding: 4px 10px;
+  background: rgba(255, 77, 79, 0.2);
+  border: 1px solid #ff4d4f;
+  color: #ff4d4f;
+  padding: 8px 16px;
   border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
-  transition: all 0.2s;
-}
-
-.ui-toggle-btn:hover {
-  background: rgba(0, 210, 255, 0.25);
-  box-shadow: 0 0 10px rgba(0, 210, 255, 0.5);
-}
-
-.loading-text {
-  color: rgba(255, 255, 255, 0.5);
-  text-align: center;
-  padding: 20px;
-  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
-}
-
-.resource-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 15px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
-  padding-bottom: 10px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.resource-item {
-  cursor: pointer;
-}
-
-.resource-item.selected {
-  background: rgba(0, 210, 255, 0.08);
-  border-radius: 6px;
-  padding: 12px;
-  margin-left: -12px;
-  margin-right: -12px;
-  width: calc(100% + 24px);
-}
-
-.resource-item .info {
-  flex: 1;
-  margin-right: 20px;
-}
-
-.resource-item .name {
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 6px;
-  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
-}
-
-.resource-item .details {
-  display: flex;
-  gap: 15px;
-}
-
-.resource-item .detail {
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 12px;
-  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
-}
-
-.resource-item .btn-group {
-  white-space: nowrap;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.resource-item .dispatch-btn {
-  background: linear-gradient(45deg, var(--neon-red), #ff7875);
-  border: none;
-  color: white;
-  padding: 6px 12px;
-  border-radius: 4px;
-  cursor: pointer;
+  font-size: 13px;
   font-weight: bold;
-  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  transition: all 0.3s;
-}
-
-.resource-item .dispatch-btn:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 15px rgba(255, 77, 79, 0.5);
-}
-
-.weather-controls {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  z-index: 2000;
-  display: flex;
-  gap: 10px;
-  background: var(--bg-glass);
-  backdrop-filter: blur(10px);
-  padding: 10px;
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-  box-shadow: 0 0 20px rgba(0, 210, 255, 0.1);
-  width: 480px;
-  justify-content: center;
-  box-sizing: border-box;
-}
-.weather-controls button {
-  background: transparent;
-  border: 1px solid var(--border-color);
-  font-size: 20px;
   cursor: pointer;
+  box-shadow: 0 0 10px rgba(255, 77, 79, 0.3);
   transition: all 0.3s;
-  border-radius: 4px;
-  padding: 5px 10px;
-  color: var(--text-primary);
-}
-.weather-controls button:hover {
-  transform: scale(1.2);
-  background: rgba(0, 210, 255, 0.2);
-  border-color: var(--neon-blue);
-  box-shadow: 0 0 10px rgba(0, 210, 255, 0.4);
+  animation: pulse-red 2s infinite;
 }
 
-.layer-controls {
-  position: absolute;
-  top: 80px;
-  right: 20px;
-  z-index: 2000;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: var(--bg-glass);
-  backdrop-filter: blur(10px);
-  padding: 8px 12px;
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-  box-shadow: 0 0 12px rgba(0, 210, 255, 0.15);
+.unlock-view-btn:hover {
+  background: rgba(255, 77, 79, 0.6);
+  color: #fff;
+  box-shadow: 0 0 20px rgba(255, 77, 79, 0.6);
+  transform: scale(1.05);
 }
 
-.layer-switch {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-primary);
-  font-family: 'Rajdhani', 'Roboto Mono', monospace, sans-serif;
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(255, 77, 79, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
 }
 
-.layer-switch input {
-  accent-color: var(--neon-blue);
-}
 </style>
-
 <style>
-.ui-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  padding: 20px;
-  box-sizing: border-box;
-  display: flex;
-  justify-content: space-between;
-}
-
-.ui-layer .panel-box,
-.ui-layer .panel-box * {
-  pointer-events: auto;
-}
-
-.left-panel {
-  width: clamp(320px, 22vw, 380px);
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* 左侧载具列表：固定小窗 + 滚轮 */
-.vehicle-list {
-  max-height: 320px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.vehicle-list::-webkit-scrollbar {
-  width: 4px;
-}
-.vehicle-list::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.5);
-}
-.vehicle-list::-webkit-scrollbar-thumb {
-  background: var(--neon-blue);
-  border-radius: 2px;
-}
-.vehicle-list::-webkit-scrollbar-thumb:hover {
-  background: #00cc6e;
-}
-
-.bottom-panel {
-  position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 900px;
-  max-width: 90vw;
-}
+.ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: 20px; box-sizing: border-box; display: flex; justify-content: space-between; }
+.ui-layer .panel-box, .ui-layer .panel-box * { pointer-events: auto; }
+.left-panel { width: clamp(320px, 22vw, 380px); display: flex; flex-direction: column; gap: 16px; }
+.bottom-panel { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 900px; max-width: 90vw; }
 </style>

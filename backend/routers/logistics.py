@@ -115,6 +115,29 @@ class FleetState(SQLModel):
 ACTIVE_FLEET: Dict[str, Dict] = {}
 
 
+# ================================
+#   空域高度层动态分配 (Altitude Allocation)
+# ================================
+def _allocate_drone_altitude() -> float:
+    """
+    动态分配无人机飞行高度。
+    设定 5 个高度层 (120m - 240m)，间隔 30m。
+    算法：找出当前天空中被占用最少的高度层，实现“负载均衡”防撞。
+    """
+    available_layers = [120.0, 150.0, 180.0, 210.0, 240.0]
+    usage = {layer: 0 for layer in available_layers}
+
+    # 统计当前在途飞机的层级占用情况
+    for fleet in ACTIVE_FLEET.values():
+        if fleet.get("type") == "DRONE" and fleet.get("status") == "FLYING":
+            alt = fleet.get("altitude", 0.0)
+            if alt in usage:
+                usage[alt] += 1
+
+    # 返回占用数最少的高度层
+    return min(usage, key=usage.get)
+
+
 def _haversine_distance_m(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
     """简易球面距离计算，单位：米。"""
     r = 6371000.0
@@ -160,6 +183,7 @@ def _register_fleet(resource_id: int, path: List[List[float]], use_drone: bool) 
     ACTIVE_FLEET[fleet_id] = {
         "id": fleet_id,
         "type": "DRONE" if use_drone else "AMBULANCE",
+        "status": "FLYING",
         "resource_id": resource_id,
         "path": path,
         "segment_lengths": seg_lengths,
@@ -227,6 +251,7 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     print(f"🗺️ 路径规划: {request.start_node}({real_start}) -> {request.end_node}({real_end})")
 
     total_distance_km = 0.0
+    assigned_altitude = 0.0
 
     try:
         # 4. 结合路网计算路径
@@ -234,6 +259,8 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
 
         # 格式化为前端需要的 [[lng, lat], ...]
         path = [[p["lng"], p["lat"]] for p in path_points]
+        # 🌟 新增：向空管系统申请高度层！
+        assigned_altitude = _allocate_drone_altitude() if recommend_drone else 0.0
 
         # 在内存中登记一个新的在途载具，供 /api/fleet 实时查询
         if path:
@@ -248,12 +275,20 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
                 path=path,
                 use_drone=recommend_drone,
             )
+            # 把高度记入内存（便于后续调度统计层级占用）
+            for f in ACTIVE_FLEET.values():
+                if (
+                    f.get("resource_id") == request.resource_id
+                    and f.get("type") == ("DRONE" if recommend_drone else "AMBULANCE")
+                ):
+                    f["altitude"] = assigned_altitude
 
     except Exception as e:
         print(f"❌ 寻路失败: {e}")
         # 如果寻路失败（比如节点名字不对），返回一个空的路径，防止前端崩溃
         # 或者返回一条只有起终点的直线作为兜底
         path = []
+        assigned_altitude = 0.0
 
     # 基于推荐方案做一次风险评估
     chosen_type = "DRONE" if recommend_drone else "AMBULANCE"
@@ -336,6 +371,7 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
         "resource_id": request.resource_id,
         "recommend": recommend_drone,
         "path": path,  # 这里返回的是真实的路径点
+        "altitude": assigned_altitude,
         "warnings": warnings,
         # 完整信息
         "resource_info": resource,

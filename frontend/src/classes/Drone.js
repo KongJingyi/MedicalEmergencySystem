@@ -27,7 +27,7 @@ export class Drone {
    * @param {Array<[number, number]>} pathPoints - 后端返回的路径数组 [[lng, lat], [lng, lat], ...]
    * @param {String} type - 载具类型 ('DRONE' 或 'AMBULANCE')
    */
-  flyTo(pathPoints, type = 'DRONE') {
+  flyTo(pathPoints, type = 'DRONE', customPathColor = null) {
     this.status = 'FLYING'
 
     // 1. 读取配置
@@ -63,7 +63,7 @@ export class Drone {
         resolution: 1,
         material: new Cesium.PolylineGlowMaterialProperty({
           glowPower: 0.2,
-          color: this.typeConfig.pathColor,
+          color: customPathColor || this.typeConfig.pathColor,
         }),
         width: 6,
       },
@@ -106,7 +106,8 @@ export class Drone {
     // 遍历每一个坐标点
     for (let i = 0; i < pathPoints.length; i++) {
       const pt = pathPoints[i] // [lng, lat]
-      const position = Cesium.Cartesian3.fromDegrees(pt[0], pt[1], height)
+      const pointAlt = typeof pt[2] === 'number' ? pt[2] : height
+      const position = Cesium.Cartesian3.fromDegrees(pt[0], pt[1], pointAlt)
 
       if (i === 0) {
         // 起点
@@ -114,7 +115,8 @@ export class Drone {
       } else {
         // 计算与上一个点的距离
         const prevPt = pathPoints[i - 1]
-        const prevPos = Cesium.Cartesian3.fromDegrees(prevPt[0], prevPt[1], height)
+        const prevAlt = typeof prevPt[2] === 'number' ? prevPt[2] : height
+        const prevPos = Cesium.Cartesian3.fromDegrees(prevPt[0], prevPt[1], prevAlt)
         const distance = Cesium.Cartesian3.distance(prevPos, position)
 
         // 时间 = 距离 / 速度，防止距离为 0 导致时间停滞

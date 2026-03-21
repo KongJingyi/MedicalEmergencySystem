@@ -50,6 +50,23 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // 9. 路径剖面数据（距离-高度），供 ECharts 使用
   const routeProfile = ref([])
+  // 10. 轨迹配色轮询索引（让不同调度任务显示不同颜色）
+  let pathColorCursor = 0
+  const PATH_COLORS = [
+    Cesium.Color.CYAN,
+    Cesium.Color.ORANGE,
+    Cesium.Color.MAGENTA,
+    Cesium.Color.LIME,
+    Cesium.Color.DEEPSKYBLUE,
+    Cesium.Color.HOTPINK,
+    Cesium.Color.GOLD,
+  ]
+
+  const nextPathColor = () => {
+    const color = PATH_COLORS[pathColorCursor % PATH_COLORS.length]
+    pathColorCursor += 1
+    return color
+  }
 
   const initWeather = () => {
     if (viewerRef.value && !weatherSystem) {
@@ -113,65 +130,84 @@ export function useDrone(viewerRef, hospitalPressure) {
       const result = res.data
       const isDrone = result.recommend
       const rawPath = result.path
+      
+      // 🌟 获取后端分配的专属高度，如果没有则兜底 200
+      const assignedAltitude = result.altitude || 200
+      
+      // 🌟 统一设定一个“安全悬停高度”，避开北京的建筑群和地形起伏
+      const safeHoverAltitude = 800
 
       if (viewerRef.value && rawPath && rawPath.length > 0) {
-        // 关键：把 GCJ02 转为 WGS84，适配 Cesium
-        const wgs84Path = rawPath.map((pt) =>
-          gcoord.transform(pt, gcoord.GCJ02, gcoord.WGS84)
-        )
+        const wgs84Path = rawPath
+        if (wgs84Path.length < 2) {
+          alert("⚠️ 路径点不足，无法绘制路径！请检查起终点名称是否在路网中。")
+          return
+        }
 
-        // 生成高度剖面数据：距离 (km) vs 高度 (m)
         const profileData = []
+        const pathWithAltitude = [] // 🌟 新建一个带高度的三维路径数组
+        const flat = [] // 给画线用的数组
         let accumulatedDistance = 0
 
         for (let i = 0; i < wgs84Path.length; i++) {
           const [lng, lat] = wgs84Path[i]
 
-          // 模拟飞行高度：无人机中段 200m，起终点落在地面；救护车保持 0m
-          let altitude = isDrone ? 200 : 0
-          if (i === 0 || i === wgs84Path.length - 1) {
-            altitude = 0
+          // 🌟 核心修改：起降与巡航高度逻辑
+          let currentAlt = 0
+          
+          if (isDrone) {
+            if (i === 0 || i === wgs84Path.length - 1) {
+               // 起点和终点：在 80 米安全高度悬停（垂直起降）
+              currentAlt = safeHoverAltitude
+            } else {
+               // 巡航阶段：爬升到专属分配的高度层 (120, 150, 180 等)
+              currentAlt = assignedAltitude
+            }
+          } else {
+            // 救护车：稍微垫高 2 米，防止轮胎陷进 3D 地形里
+            currentAlt = 20
           }
+
+          // 组装给 Drone.js 用的 3D 坐标 [经度, 纬度, 高度]
+          pathWithAltitude.push([lng, lat, currentAlt])
+          // 组装给 Cesium 画线用的连续数组
+          flat.push(lng, lat, currentAlt)
 
           if (i > 0) {
             const [prevLng, prevLat] = wgs84Path[i - 1]
             const prevPos = Cesium.Cartesian3.fromDegrees(prevLng, prevLat)
             const currPos = Cesium.Cartesian3.fromDegrees(lng, lat)
-            const dist = Cesium.Cartesian3.distance(prevPos, currPos) // m
+            const dist = Cesium.Cartesian3.distance(prevPos, currPos)
             accumulatedDistance += dist
           }
 
           profileData.push({
-            distance: accumulatedDistance / 1000, // km
-            altitude,
+            distance: accumulatedDistance / 1000,
+            altitude: currentAlt,
           })
         }
 
         routeProfile.value = profileData
 
-        // 调试用：在地面画一条绿色细线，看路径是否沿着马路
         const viewer = viewerRef.value
-        const flat = []
-        for (const [lng, lat] of wgs84Path) {
-          flat.push(lng, lat, 0)
-        }
-        // 使用同样的流光材质绘制一条“规划路径”光带，便于调试观察
+        
+        // 绘制三维空中立体光带航线
         viewer.entities.add({
           polyline: {
             positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat),
             width: 3,
             material: new Cesium.PolylineGlowMaterialProperty({
               glowPower: 0.2,
-              color: Cesium.Color.LIME.withAlpha(0.8),
+              color: nextPathColor(), // 使用了你写的轮询变色！
             }),
-            clampToGround: true,
+            clampToGround: false, // 必须 false
           },
         })
 
-        // 创建并起飞
-        createAndFly(isDrone, resource.id, wgs84Path)
+        // 启动！
+        createAndFly(isDrone, resource.id, pathWithAltitude)
       } else {
-        alert('后端未返回有效路径！')
+        alert('后端未返回有效路径！请检查路网配置。')
       }
     } catch (error) {
       console.error("资源调度路径规划请求失败:", error);
@@ -180,7 +216,7 @@ export function useDrone(viewerRef, hospitalPressure) {
   }
 
   // 根据后端推荐结果，创建无人机/车辆并执行飞行/行驶逻辑
-  const createAndFly = (isDrone, resourceId, pathData) => {
+  const createAndFly = (isDrone, resourceId, pathData, pathColor) => {
     const viewer = viewerRef.value;
     if (!viewer) return;
 
@@ -204,7 +240,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     newVehicle.logicalType = isDrone ? '无人机' : '救护车';
 
     // 执行载体的飞行/行驶方法：直接吃经过纠偏的路径数组
-    newVehicle.flyTo(pathData, type);
+    newVehicle.flyTo(pathData, type, pathColor);
 
     // 将新载体加入机队统一管理
     droneFleet.set(id, newVehicle);
@@ -212,25 +248,66 @@ export function useDrone(viewerRef, hospitalPressure) {
     // 关联第一视角，自动打开无人机视角
     activeDroneEntity.value = markRaw(newVehicle.entity);
     showCamera.value = true;
+
+    // 🌟 每次调度都先飞到该任务起飞点，再切换到新实体跟随，避免只有首次移动镜头
+    if (Array.isArray(pathData) && pathData.length > 0) {
+      const [startLng, startLat, startAlt = 0] = pathData[0]
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(
+          startLng,
+          startLat,
+          Math.max(startAlt + (isDrone ? 700 : 350), 350)
+        ),
+        duration: 1.2,
+      })
+    }
+
+    viewer.trackedEntity = undefined
+    setTimeout(() => {
+      viewer.trackedEntity = newVehicle.entity
+      viewer.flyTo(newVehicle.entity, {
+        duration: 1.0,
+        offset: new Cesium.HeadingPitchRange(
+          0,
+          Cesium.Math.toRadians(-50),
+          isDrone ? 600 : 300
+        ),
+      })
+    }, 150)
   }
 
-  // 根据资源ID，查找对应配送载体并打开第一视角
-  const viewVehicle = (resourceId) => {
+  // 根据载具ID，查找对应配送载体并锁定视角
+  const viewVehicle = (vehicleId) => {
+    const viewer = viewerRef.value
+    if (!viewer) return
+
     let targetVehicle = null;
-    // 遍历机队，匹配包含当前资源ID的载体
+    // 遍历机队，匹配包含当前载具ID的载体
     for (const [key, val] of droneFleet) {
-      if (key.includes(String(resourceId))) {
+      if (key.includes(String(vehicleId))) {
         targetVehicle = val;
         break;
       }
     }
 
-    // 找到载体则关联视角，否则弹窗提示
+    // 找到载体则关联视角并强制锁定，否则弹窗提示
     if (targetVehicle) {
       activeDroneEntity.value = markRaw(targetVehicle.entity);
       showCamera.value = true;
+      // 🌟 核心：强行将 Cesium 相机锁定到这个实体上
+      viewer.trackedEntity = targetVehicle.entity;
     } else {
-      alert("未找到该资源对应的配送无人机！请先调度无人机执行配送任务");
+      alert("未找到该载具，可能尚未起飞或已结束任务！");
+    }
+  }
+
+  // 🌟 新增：解除视角锁定，恢复自由移动
+  const unlockCamera = () => {
+    const viewer = viewerRef.value
+    if (viewer) {
+      viewer.trackedEntity = undefined // 这一句是恢复自由平移的灵魂！
+      activeDroneEntity.value = null   // 清空当前激活实体
+      showCamera.value = false         // 关闭第一视角 HUD
     }
   }
 
@@ -400,6 +477,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     showCamera,
     dispatch,
     viewVehicle,
+    unlockCamera,
     closeCamera,
     clearAll,
     changeWeather,

@@ -43,6 +43,24 @@ const animateNumber = (current, target, setter, step = 1) => {
 let animationFrame = null
 let lastUpdateTime = 0
 
+const getMainViewer = () => {
+  if (!props.mainViewer) return null
+  // 兼容两种传法：Viewer 实例 / ref(Viewer)
+  return props.mainViewer?.scene ? props.mainViewer : props.mainViewer?.value || null
+}
+
+const bindMainViewerSync = () => {
+  const mainViewer = getMainViewer()
+  if (!mainViewer || !mainViewer.scene) return
+  if (removeListener) {
+    removeListener()
+    removeListener = null
+  }
+  removeListener = mainViewer.scene.preRender.addEventListener(() => {
+    syncCamera()
+  })
+}
+
 const updateDisplayValues = () => {
   const now = Date.now()
   if (now - lastUpdateTime > 50) {
@@ -77,18 +95,19 @@ const initMiniViewer = async () => {
     });
   } catch (e) { console.error("3D建筑瓦片加载失败", e) }
 
-  removeListener = props.mainViewer.scene.preRender.addEventListener(() => {
-    syncCamera()
-  })
+  bindMainViewerSync()
   
   updateDisplayValues()
 }
 
 const syncCamera = () => {
-  if (!props.vehicle || !miniViewer) return
+  const mainViewer = getMainViewer()
+  if (!props.vehicle || !miniViewer || !mainViewer || !mainViewer.clock) return
+  if (miniViewer.isDestroyed && miniViewer.isDestroyed()) return
   
-  const time = props.mainViewer.clock.currentTime
+  const time = mainViewer.clock.currentTime
   const rawVehicle = toRaw(props.vehicle)
+  if (!rawVehicle || !rawVehicle.position || !rawVehicle.orientation) return
   const position = rawVehicle.position.getValue(time)
   const orientation = rawVehicle.orientation.getValue(time)
 
@@ -129,12 +148,22 @@ onMounted(() => {
   initMiniViewer()
 })
 
+watch(
+  () => props.mainViewer,
+  () => {
+    bindMainViewerSync()
+  }
+)
+
 onBeforeUnmount(() => {
+  if (removeListener) {
+    removeListener()
+    removeListener = null
+  }
   if (animationFrame) {
     cancelAnimationFrame(animationFrame)
   }
   if (miniViewer) {
-    if (removeListener) removeListener()
     miniViewer.destroy()
   }
 })
