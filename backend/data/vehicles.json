@@ -1,0 +1,9 @@
+[
+  { "id": "D-01", "type": "DRONE", "battery_start": 100 },
+  { "id": "D-02", "type": "DRONE", "battery_start": 98 },
+  { "id": "D-03", "type": "DRONE", "battery_start": 76 },
+  { "id": "D-04", "type": "DRONE", "battery_start": 100 },
+  { "id": "D-05", "type": "DRONE", "battery_start": 69 },
+  { "id": "A-01", "type": "AMBULANCE", "battery_start": 100 },
+  { "id": "A-02", "type": "AMBULANCE", "battery_start": 85 }
+]

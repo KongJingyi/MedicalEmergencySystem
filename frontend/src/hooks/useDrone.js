@@ -102,6 +102,8 @@ export function useDrone(viewerRef, hospitalPressure) {
   const dispatch = async (resource, startNodeOrOptions, endNodeMaybe) => {
     let startNode = '西直门桥'
     let endNode = '北京积水潭医院'
+    let vehicleId = null
+    let forcedType = null
 
     if (
       startNodeOrOptions &&
@@ -111,6 +113,8 @@ export function useDrone(viewerRef, hospitalPressure) {
       // 写法 1：对象解构
       startNode = startNodeOrOptions.startNode ?? startNode
       endNode = startNodeOrOptions.endNode ?? endNode
+      vehicleId = startNodeOrOptions.vehicleId ?? null
+      forcedType = startNodeOrOptions.forcedType ?? null
     } else {
       // 写法 2：两个字符串
       startNode = startNodeOrOptions ?? startNode
@@ -125,6 +129,8 @@ export function useDrone(viewerRef, hospitalPressure) {
         resource_id: resource.id,
         start_node: startNode,
         end_node: endNode,
+        vehicle_id: vehicleId,
+        forced_type: forcedType,
       })
 
       const result = res.data
@@ -149,30 +155,44 @@ export function useDrone(viewerRef, hospitalPressure) {
         const flat = [] // 给画线用的数组
         let accumulatedDistance = 0
 
+        // 🌟 兜底巡航高度（后端现在会传 300~500）
+        const assignedAltitude = result.altitude || 400
+        // 🌟 地面安全垫高：只需垫高 20 米，防止飞机出生在马路地底即可
+        const groundClearance = 20
+
         for (let i = 0; i < wgs84Path.length; i++) {
           const [lng, lat] = wgs84Path[i]
 
-          // 🌟 核心修改：起降与巡航高度逻辑
-          let currentAlt = 0
-          
           if (isDrone) {
-            if (i === 0 || i === wgs84Path.length - 1) {
-               // 起点和终点：在 80 米安全高度悬停（垂直起降）
-              currentAlt = safeHoverAltitude
+            if (i === 0) {
+              // 🚀 起点：实现垂直起飞！
+              // 第 1 个点：地表起飞点
+              pathWithAltitude.push([lng, lat, groundClearance])
+              flat.push(lng, lat, groundClearance)
+              // 第 2 个点：原地垂直爬升到巡航高度
+              pathWithAltitude.push([lng, lat, assignedAltitude])
+              flat.push(lng, lat, assignedAltitude)
+            } else if (i === wgs84Path.length - 1) {
+              // 🛬 终点：实现垂直降落！
+              // 第 1 个点：保持巡航高度到达目标上空
+              pathWithAltitude.push([lng, lat, assignedAltitude])
+              flat.push(lng, lat, assignedAltitude)
+              // 第 2 个点：原地垂直降落到地表
+              pathWithAltitude.push([lng, lat, groundClearance])
+              flat.push(lng, lat, groundClearance)
             } else {
-               // 巡航阶段：爬升到专属分配的高度层 (120, 150, 180 等)
-              currentAlt = assignedAltitude
+              // ✈️ 中间过程：保持高空水平巡航
+              pathWithAltitude.push([lng, lat, assignedAltitude])
+              flat.push(lng, lat, assignedAltitude)
             }
           } else {
-            // 救护车：稍微垫高 2 米，防止轮胎陷进 3D 地形里
-            currentAlt = 20
+            // 🚑 救护车：依然贴地行驶
+            const currentAlt = 2
+            pathWithAltitude.push([lng, lat, currentAlt])
+            flat.push(lng, lat, currentAlt)
           }
 
-          // 组装给 Drone.js 用的 3D 坐标 [经度, 纬度, 高度]
-          pathWithAltitude.push([lng, lat, currentAlt])
-          // 组装给 Cesium 画线用的连续数组
-          flat.push(lng, lat, currentAlt)
-
+          // 距离累加逻辑保持不变
           if (i > 0) {
             const [prevLng, prevLat] = wgs84Path[i - 1]
             const prevPos = Cesium.Cartesian3.fromDegrees(prevLng, prevLat)
@@ -183,7 +203,7 @@ export function useDrone(viewerRef, hospitalPressure) {
 
           profileData.push({
             distance: accumulatedDistance / 1000,
-            altitude: currentAlt,
+            altitude: isDrone ? assignedAltitude : 2,
           })
         }
 

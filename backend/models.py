@@ -221,3 +221,5 @@ class RouteRequest(SQLModel):
     resource_id: int  # 送什么？
     start_node: str   # 从哪来？ (可以是坐标 \"120.1,30.2\" 或节点 ID)
     end_node: str     # 去哪儿？
+    vehicle_id: Optional[str] = None  # 哪台车/机执行（如 D-01 / A-01），用于后端电量等状态初始化
+    forced_type: Optional[str] = None  # 可选：强制指定 DRONE / AMBULANCE（用于演示人工派单）

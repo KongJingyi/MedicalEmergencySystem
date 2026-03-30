@@ -159,7 +159,8 @@ const executeDispatch = async (vehicle, startNode) => {
     await droneDispatch(selectedResource.value, { 
       startNode: startNode, 
       endNode: target,
-      forcedType: forcedType
+      forcedType: forcedType,
+      vehicleId: vehicle.id,
     })
 
     // 动态扣减医院缺口数据

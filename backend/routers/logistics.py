@@ -3,7 +3,86 @@ from sqlmodel import Session, SQLModel, select
 from typing import Dict, List, Optional
 import json
 import math
+import os
 import time
+import requests  # 🌟 新增：用于调用高德API
+
+# --- 🌟 新增：中国地图坐标系纠偏算法 (GCJ-02 to WGS-84) ---
+# 定义椭球体参数
+a = 6378245.0
+ee = 0.00669342162296594323
+
+
+def _transformlat(lng, lat):
+    ret = (
+        -100.0
+        + 2.0 * lng
+        + 3.0 * lat
+        + 0.2 * lat * lat
+        + 0.1 * lng * lat
+        + 0.2 * math.sqrt(abs(lng))
+    )
+    ret += (
+        (20.0 * math.sin(6.0 * lng * math.pi) + 20.0 * math.sin(2.0 * lng * math.pi))
+        * 2.0
+        / 3.0
+    )
+    ret += (
+        (20.0 * math.sin(lat * math.pi) + 40.0 * math.sin(lat / 3.0 * math.pi))
+        * 2.0
+        / 3.0
+    )
+    ret += (
+        (160.0 * math.sin(lat / 12.0 * math.pi) + 320 * math.sin(lat * math.pi / 30.0))
+        * 2.0
+        / 3.0
+    )
+    return ret
+
+
+def _transformlng(lng, lat):
+    ret = (
+        300.0
+        + lng
+        + 2.0 * lat
+        + 0.1 * lng * lng
+        + 0.1 * lng * lat
+        + 0.1 * math.sqrt(abs(lng))
+    )
+    ret += (
+        (20.0 * math.sin(6.0 * lng * math.pi) + 20.0 * math.sin(2.0 * lng * math.pi))
+        * 2.0
+        / 3.0
+    )
+    ret += (
+        (20.0 * math.sin(lng * math.pi) + 40.0 * math.sin(lng / 3.0 * math.pi))
+        * 2.0
+        / 3.0
+    )
+    ret += (
+        (150.0 * math.sin(lng / 12.0 * math.pi) + 300.0 * math.sin(lng / 30.0 * math.pi))
+        * 2.0
+        / 3.0
+    )
+    return ret
+
+
+def gcj02_to_wgs84(lng, lat):
+    """
+    🌟 核心功能：将高德 GCJ-02 坐标转换为标准 Cesium WGS-84 坐标
+    """
+    dlat = _transformlat(lng - 105.0, lat - 35.0)
+    dlng = _transformlng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * math.pi
+    magic = math.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * math.pi)
+    dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * math.pi)
+    mglat = lat + dlat
+    mglng = lng + dlng
+    # 精确计算标准 WGS-84 坐标
+    return lng * 2 - mglng, lat * 2 - mglat
 
 from database import get_session
 from models import MedicalResource, RouteRequest, Hospital, DispatchTask, RiskEvent, DecisionLog
@@ -47,6 +126,7 @@ LOCATION_MAPPING = {
 # ================================
 
 _ROAD_NODES_CACHE: Optional[List[Dict]] = None
+_VEHICLES_CACHE: Optional[List[Dict]] = None
 
 
 def _load_road_nodes() -> List[Dict]:
@@ -59,6 +139,31 @@ def _load_road_nodes() -> List[Dict]:
     except Exception:
         _ROAD_NODES_CACHE = []
     return _ROAD_NODES_CACHE
+
+
+def _load_vehicles() -> List[Dict]:
+    global _VEHICLES_CACHE
+    if _VEHICLES_CACHE is not None:
+        return _VEHICLES_CACHE
+    try:
+        with open("data/vehicles.json", "r", encoding="utf-8") as f:
+            _VEHICLES_CACHE = json.load(f)
+    except Exception:
+        _VEHICLES_CACHE = []
+    return _VEHICLES_CACHE
+
+
+def _get_vehicle_battery_start(vehicle_id: Optional[str]) -> float:
+    if not vehicle_id:
+        return 100.0
+    vehicles = _load_vehicles()
+    for v in vehicles:
+        if v.get("id") == vehicle_id:
+            try:
+                return float(v.get("battery_start", 100.0))
+            except Exception:
+                return 100.0
+    return 100.0
 
 
 def _nearest_road_node_name(lng: float, lat: float) -> Optional[str]:
@@ -121,10 +226,10 @@ ACTIVE_FLEET: Dict[str, Dict] = {}
 def _allocate_drone_altitude() -> float:
     """
     动态分配无人机飞行高度。
-    设定 5 个高度层 (120m - 240m)，间隔 30m。
+    设定 5 个高度层 (300m - 500m)，间隔 50m。
     算法：找出当前天空中被占用最少的高度层，实现“负载均衡”防撞。
     """
-    available_layers = [120.0, 150.0, 180.0, 210.0, 240.0]
+    available_layers = [300.0, 350.0, 400.0, 450.0, 500.0]
     usage = {layer: 0 for layer in available_layers}
 
     # 统计当前在途飞机的层级占用情况
@@ -136,6 +241,62 @@ def _allocate_drone_altitude() -> float:
 
     # 返回占用数最少的高度层
     return min(usage, key=usage.get)
+
+
+# ================================
+#   高德 API 真实路网寻路
+# ================================
+
+def _get_coords_by_name(name: str, session: Session):
+    """
+    根据前端传来的名字，获取它真实的经纬度 (用于传给高德 API)
+    """
+    mapped_name = LOCATION_MAPPING.get(name, name)
+
+    # 1. 尝试从医院表获取精确坐标
+    hosp = session.exec(select(Hospital).where(Hospital.name == mapped_name)).first()
+    if hosp:
+        return hosp.lng, hosp.lat
+
+    # 2. 尝试从路网节点 json 获取桥梁坐标
+    nodes = _load_road_nodes()
+    for n in nodes:
+        if n["name"] == mapped_name:
+            return float(n["lng"]), float(n["lat"])
+
+    return None, None
+
+
+def get_amap_driving_route(start_lng, start_lat, end_lng, end_lat):
+    """
+    调用高德地图 Web服务 API，获取真实的驾车轨迹点阵
+    """
+    # 🚨🚨🚨 把这里换成你申请的【Web服务】Key！
+    api_key = os.getenv("AMAP_API_KEY") or "ba6be5f0432f0fd06747f2ce5d8aae45"
+
+    url = (
+        "https://restapi.amap.com/v3/direction/driving"
+        f"?origin={start_lng},{start_lat}&destination={end_lng},{end_lat}&key={api_key}"
+    )
+
+    try:
+        response = requests.get(url, timeout=5).json()
+        if response.get("status") == "1" and response.get("route", {}).get("paths"):
+            path_points = []
+            steps = response["route"]["paths"][0]["steps"]
+            for step in steps:
+                # 高德返回的 polyline 是长这样的："116.1,39.1;116.2,39.2"
+                polyline = step["polyline"].split(";")
+                for point in polyline:
+                    lng, lat = map(float, point.split(","))
+                    # 🌟 关键修改：将加密的 GCJ-02 转换为标准 WGS-84
+                    wgs_lng, wgs_lat = gcj02_to_wgs84(lng, lat)
+                    path_points.append([wgs_lng, wgs_lat])
+            return path_points  # 返回几百个密集坐标点
+    except Exception as e:
+        print(f"❌ 高德API请求失败: {e}")
+
+    return []  # 失败兜底返回空
 
 
 def _haversine_distance_m(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
@@ -163,15 +324,24 @@ def _compute_segment_lengths(path: List[List[float]]) -> List[float]:
     return segs
 
 
-def _register_fleet(resource_id: int, path: List[List[float]], use_drone: bool) -> None:
+def _register_fleet(
+    resource_id: int,
+    path: List[List[float]],
+    use_drone: bool,
+    vehicle_id: Optional[str] = None,
+    battery_start: float = 100.0,
+) -> None:
     """
     在内存中登记一个新的在途载具。
     """
     if not path:
         return
 
-    # 生成唯一 ID
-    fleet_id = f"{'drone' if use_drone else 'car'}-{resource_id}-{int(time.time())}"
+    # 生成唯一 ID（优先用真实载具编号，便于前端锁定/追踪）
+    if vehicle_id:
+        fleet_id = f"{vehicle_id}-{int(time.time())}"
+    else:
+        fleet_id = f"{'drone' if use_drone else 'car'}-{resource_id}-{int(time.time())}"
 
     # 设定不同载具的平均速度（m/s），结合当前天气
     speed_kmh = get_speed_kmh("DRONE" if use_drone else "AMBULANCE")
@@ -184,13 +354,14 @@ def _register_fleet(resource_id: int, path: List[List[float]], use_drone: bool) 
         "id": fleet_id,
         "type": "DRONE" if use_drone else "AMBULANCE",
         "status": "FLYING",
+        "vehicle_id": vehicle_id,
         "resource_id": resource_id,
         "path": path,
         "segment_lengths": seg_lengths,
         "distance_total": total_distance,
         "speed_mps": speed_mps,
         "start_time": time.time(),
-        "battery_start": 100.0,
+        "battery_start": float(battery_start),
     }
 
 
@@ -243,6 +414,8 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     
     # 2. 顶层推荐方案（True = 推荐无人机）
     recommend_drone = drone_result["score"] > ambulance_result["score"]
+    if request.forced_type in {"DRONE", "AMBULANCE"}:
+        recommend_drone = request.forced_type == "DRONE"
 
     # 3. 起终点解析：业务名/医院名 -> 路网节点名（必要时做最近节点吸附）
     real_start = _resolve_to_road_node(request.start_node, session)
@@ -254,13 +427,26 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     assigned_altitude = 0.0
 
     try:
-        # 4. 结合路网计算路径
-        path_points = compute_route(real_start, real_end)
+        # 4. 🌟 实施“水陆双轨制”真实寻路！
+        if recommend_drone:
+            # 【无人机路线】：走直线/简易拓扑图，拉高高度
+            path_points = compute_route(real_start, real_end)
+            path = [[p["lng"], p["lat"]] for p in path_points]
+            assigned_altitude = _allocate_drone_altitude()  # 动态分配高空航道
+        else:
+            # 【救护车路线】：获取精确坐标，调用高德 API，贴地行驶
+            start_lng, start_lat = _get_coords_by_name(request.start_node, session)
+            end_lng, end_lat = _get_coords_by_name(request.end_node, session)
 
-        # 格式化为前端需要的 [[lng, lat], ...]
-        path = [[p["lng"], p["lat"]] for p in path_points]
-        # 🌟 新增：向空管系统申请高度层！
-        assigned_altitude = _allocate_drone_altitude() if recommend_drone else 0.0
+            if start_lng and end_lng:
+                print(f"🚑 触发高德真实路网计算: ({start_lng},{start_lat}) -> ({end_lng},{end_lat})")
+                path = get_amap_driving_route(start_lng, start_lat, end_lng, end_lat)
+            else:
+                # 兜底：如果找不到坐标，用原来的简易路网
+                path_points = compute_route(real_start, real_end)
+                path = [[p["lng"], p["lat"]] for p in path_points]
+
+            assigned_altitude = 0.0  # 救护车高度分配为0 (前端会垫高2米)
 
         # 在内存中登记一个新的在途载具，供 /api/fleet 实时查询
         if path:
@@ -270,10 +456,13 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
                 lng2, lat2 = path[i]
                 total_distance_km += _haversine_distance_m(lng1, lat1, lng2, lat2) / 1000.0
 
+            battery_start = _get_vehicle_battery_start(request.vehicle_id)
             _register_fleet(
                 resource_id=request.resource_id,
                 path=path,
                 use_drone=recommend_drone,
+                vehicle_id=request.vehicle_id,
+                battery_start=battery_start,
             )
             # 把高度记入内存（便于后续调度统计层级占用）
             for f in ACTIVE_FLEET.values():
