@@ -15,6 +15,7 @@ import BottomPanel from './components/BottomPanel.vue'
 import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
 import { useAudio } from './hooks/useAudio'
+import { useLocalWeather } from './hooks/useLocalWeather'
 
 const resources = ref([])
 const hospitals = ref([])
@@ -104,7 +105,7 @@ const {
   dispatch: droneDispatch,
   showCamera,
   closeCamera,
-  changeWeather,
+  changeWeather: changeDroneWeather,
   telemetry,
   routeProfile,
   viewVehicle,
@@ -112,6 +113,22 @@ const {
 } = useDrone(viewerRef, hospitalPressure)
 const { playClick, playRadar, playWarning, stopWarning } = useAudio()
 
+// 🌟 挂载局部天气
+const { isSettingLocation, currentRainZone, activateWeatherSetter, clearWeather } = useLocalWeather(viewerRef)
+
+// 🌟 覆盖原有的 changeWeather 函数
+const changeWeather = (type) => {
+  if (type === 'localRain') {
+    bottomPanelRef.value?.logRef?.addLog('warn', '👉 请在地图上点击位置，部署局部暴雨区...')
+    activateWeatherSetter()
+  } else if (type === 'sunny') {
+    bottomPanelRef.value?.logRef?.addLog('info', '☀️ 气象武器已解除，天空恢复晴朗。')
+    clearWeather()
+    changeDroneWeather('sunny')
+  } else {
+    changeDroneWeather(type)
+  }
+}
 
 // ================= 🌟 调度方案一：AI 智能分配 =================
 const handleAIDispatch = async () => {
@@ -161,6 +178,7 @@ const executeDispatch = async (vehicle, startNode) => {
       endNode: target,
       forcedType: forcedType,
       vehicleId: vehicle.id,
+      rainZone: currentRainZone.value,
     })
 
     // 动态扣减医院缺口数据
@@ -244,10 +262,15 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
     <DroneCam v-if="showCamera && activeDroneEntity && viewerRef" :mainViewer="viewerRef" :vehicle="activeDroneEntity" @close="closeCamera" />
 
     <div class="weather-controls">
-      <button @click="playClick(); changeWeather('sunny')" title="晴天">☀️</button>
-      <button @click="playClick(); changeWeather('rain')" title="下雨">🌧️</button>
-      <button @click="playClick(); changeWeather('snow')" title="下雪">❄️</button>
-      <button @click="playClick(); changeWeather('fog')" title="大雾">🌫️</button>
+      <button @click="playClick(); changeWeather('sunny')" title="清除天气">☀️ 恢复晴朗</button>
+      <button 
+        @click="playClick(); changeWeather('localRain')" 
+        class="rain-bomb-btn"
+        :class="{ 'is-active': isSettingLocation }"
+        title="点击部署暴雨禁飞区"
+      >
+        🌧️ 部署局部暴雨
+      </button>
     </div>
 
     <div class="layer-controls">
@@ -364,6 +387,40 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 .weather-controls { position: absolute; top: 20px; right: 20px; z-index: 2000; display: flex; gap: 10px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color); width: 480px; justify-content: center; }
 .weather-controls button { background: transparent; border: 1px solid var(--border-color); font-size: 20px; cursor: pointer; transition: all 0.3s; border-radius: 4px; padding: 5px 10px; color: var(--text-primary); }
 .weather-controls button:hover { transform: scale(1.2); background: rgba(0, 210, 255, 0.2); border-color: var(--neon-blue); box-shadow: 0 0 10px rgba(0, 210, 255, 0.4); }
+
+/* ==== 局部暴雨按钮：红色脉冲呼吸灯 ==== */
+.rain-bomb-btn {
+  background: rgba(255, 77, 79, 0.12);
+  border: 1px solid rgba(255, 77, 79, 0.55);
+  color: #ff7875;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  box-shadow: 0 0 14px rgba(255, 77, 79, 0.18);
+}
+
+.rain-bomb-btn:hover {
+  background: rgba(255, 77, 79, 0.25);
+  border-color: rgba(255, 77, 79, 0.9);
+  color: #fff;
+  box-shadow: 0 0 22px rgba(255, 77, 79, 0.35);
+  transform: translateY(-1px);
+}
+
+.rain-bomb-btn.is-active {
+  background: rgba(255, 77, 79, 0.35);
+  border-color: rgba(255, 77, 79, 1);
+  color: #fff;
+  animation: pulse-red-strong 1.6s infinite;
+}
+
+@keyframes pulse-red-strong {
+  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.45); }
+  70% { box-shadow: 0 0 0 12px rgba(255, 77, 79, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
+}
 .layer-controls { position: absolute; top: 80px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border-color); }
 .layer-switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-primary); }
 

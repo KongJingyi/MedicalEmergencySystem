@@ -5,6 +5,32 @@ import random
 from typing import Dict, List, Tuple
 
 
+def point_to_segment_distance(x1: float, y1: float, x2: float, y2: float, xc: float, yc: float) -> float:
+    """
+    🌟 核心：计算点(雨区中心)到线段(起终点连线)的最短距离（米）。
+    北京地区近似：1纬度≈111320米，1经度≈85300米。
+    """
+    kx, ky = 85300.0, 111320.0
+    ax, ay = x1 * kx, y1 * ky
+    bx, by = x2 * kx, y2 * ky
+    cx, cy = xc * kx, yc * ky
+
+    vx, vy = bx - ax, by - ay
+    wx, wy = cx - ax, cy - ay
+
+    c1 = wx * vx + wy * vy
+    if c1 <= 0:
+        return math.hypot(cx - ax, cy - ay)
+
+    c2 = vx * vx + vy * vy
+    if c2 <= c1:
+        return math.hypot(cx - bx, cy - by)
+
+    b = c1 / c2
+    px, py = ax + b * vx, ay + b * vy
+    return math.hypot(cx - px, cy - py)
+
+
 # ===============================
 #  业务规则常量（风险阈值 & 天气）
 # ===============================
@@ -60,7 +86,7 @@ def get_speed_kmh(route_type: str) -> float:
 #  多因子决策评分（无人机 vs 救护车）
 # ===============================
 
-def calculate_medical_score(resource, route_type: str) -> Dict:
+def calculate_medical_score(resource, route_type: str, rain_collision: bool = False) -> Dict:
     """
     核心算法：根据【物资属性 + 运输方式 + 天气】计算【路径得分】
 
@@ -75,6 +101,15 @@ def calculate_medical_score(resource, route_type: str) -> Dict:
     else:
         speed_score = 75
         logs.append("🕒 速度：地面救护车受路况影响，基础速度评分 75")
+
+    # 🌟 新增：局部暴雨对评分的毁灭性打击！
+    if rain_collision:
+        if route_type == "DRONE":
+            speed_score -= 15
+            logs.append("🌧️ 空域：途径局部暴雨区，无人机需提升高度避险，评分 -15")
+        else:
+            speed_score -= 50
+            logs.append("🌊 路况：途径局部暴雨区，地面极易内涝拥堵，救护车评分 -50")
 
     # 1.1 天气对速度/安全的影响（基于 CURRENT_WEATHER）
     weather = get_weather()
@@ -262,7 +297,11 @@ def compute_route(start_name: str, end_name: str) -> List[Dict]:
 # ===============================
 
 def evaluate_risks(
-    resource, route_type: str, distance_km: float, bad_weather: float
+    resource,
+    route_type: str,
+    distance_km: float,
+    bad_weather: float,
+    rain_collision: bool = False,
 ) -> List[Dict]:
     """
     根据路径长度、物资属性和天气，给出风险告警列表。
@@ -318,6 +357,25 @@ def evaluate_risks(
                     "code": "TEMP_RISK",
                     "msg": "冷链预计运输时间超过安全时限，存在温控失效风险。",
                     "level": "CRITICAL",
+                }
+            )
+
+    # 🌟 新增规则 3：局部暴雨禁飞/拥堵警告
+    if rain_collision:
+        if route_type == "AMBULANCE":
+            warnings.append(
+                {
+                    "code": "FLOOD_RISK",
+                    "msg": "🚑 途径局部暴雨区，地面严重积水，运输面临极大延误风险！",
+                    "level": "CRITICAL",
+                }
+            )
+        else:
+            warnings.append(
+                {
+                    "code": "RAIN_WIND_RISK",
+                    "msg": "✈️ 途径暴雨区，伴随阵风，无人机已申请高空避让航线。",
+                    "level": "WARNING",
                 }
             )
 

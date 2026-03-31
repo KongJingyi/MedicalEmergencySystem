@@ -44,6 +44,13 @@ const updateOption = () => {
   const values = toRadarValues(props.data)
 
   const option = {
+    tooltip: {
+      backgroundColor: 'rgba(0, 8, 18, 0.92)',
+      borderColor: 'rgba(0, 210, 255, 0.35)',
+      borderWidth: 1,
+      textStyle: { color: 'rgba(255,255,255,0.92)', fontFamily: "'Rajdhani', sans-serif" },
+      extraCssText: 'box-shadow: 0 0 18px rgba(0,210,255,0.20);',
+    },
     radar: {
       indicator: [
         { name: '重量', max: 100 },
@@ -53,9 +60,9 @@ const updateOption = () => {
         { name: '温控', max: 100 },
       ],
       splitArea: { show: false },
-      splitLine: { lineStyle: { color: 'rgba(0, 210, 255, 0.12)' } },
-      axisLine: { lineStyle: { color: 'rgba(0, 210, 255, 0.3)' } },
-      axisName: { color: 'rgba(255,255,255,0.85)' },
+      splitLine: { lineStyle: { color: 'rgba(0, 210, 255, 0.16)' } },
+      axisLine: { lineStyle: { color: 'rgba(0, 210, 255, 0.32)' } },
+      axisName: { color: 'rgba(255,255,255,0.86)', fontFamily: "'Rajdhani', sans-serif", fontSize: 12, fontWeight: 600 },
     },
     series: [
       {
@@ -64,9 +71,9 @@ const updateOption = () => {
           {
             value: values,
             name: '物资属性',
-            areaStyle: { color: 'rgba(0, 210, 255, 0.35)' },
-            lineStyle: { color: '#00d2ff', width: 2 },
-            itemStyle: { color: '#00d2ff' },
+            areaStyle: { color: 'rgba(0, 210, 255, 0.22)' },
+            lineStyle: { color: '#00d2ff', width: 2, shadowBlur: 18, shadowColor: 'rgba(0, 210, 255, 0.35)' },
+            itemStyle: { color: '#00d2ff', shadowBlur: 12, shadowColor: 'rgba(0, 210, 255, 0.35)' },
           },
         ],
       },

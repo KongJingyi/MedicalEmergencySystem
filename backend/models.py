@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Dict, Optional
 
 from sqlmodel import Field, SQLModel
 
@@ -223,3 +223,5 @@ class RouteRequest(SQLModel):
     end_node: str     # 去哪儿？
     vehicle_id: Optional[str] = None  # 哪台车/机执行（如 D-01 / A-01），用于后端电量等状态初始化
     forced_type: Optional[str] = None  # 可选：强制指定 DRONE / AMBULANCE（用于演示人工派单）
+    # 🌟 新增：接收前端传来的天气炸弹坐标
+    rain_zone: Optional[Dict[str, float]] = None

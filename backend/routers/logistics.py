@@ -408,20 +408,37 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     if not resource:
         return {"error": "物资不存在"}
 
-    # 1. 计算评分
-    drone_result = calculate_medical_score(resource, "DRONE")
-    ambulance_result = calculate_medical_score(resource, "AMBULANCE")
-    
-    # 2. 顶层推荐方案（True = 推荐无人机）
-    recommend_drone = drone_result["score"] > ambulance_result["score"]
-    if request.forced_type in {"DRONE", "AMBULANCE"}:
-        recommend_drone = request.forced_type == "DRONE"
-
     # 3. 起终点解析：业务名/医院名 -> 路网节点名（必要时做最近节点吸附）
     real_start = _resolve_to_road_node(request.start_node, session)
     real_end = _resolve_to_road_node(request.end_node, session)
 
     print(f"🗺️ 路径规划: {request.start_node}({real_start}) -> {request.end_node}({real_end})")
+
+    # 🌟 🌟 🌟 从这里开始插入碰撞检测逻辑 🌟 🌟 🌟
+    start_lng, start_lat = _get_coords_by_name(request.start_node, session)
+    end_lng, end_lat = _get_coords_by_name(request.end_node, session)
+
+    rain_collision = False
+    if request.rain_zone and start_lng and end_lng:
+        rz_lng = request.rain_zone.get("lng")
+        rz_lat = request.rain_zone.get("lat")
+        if rz_lng and rz_lat:
+            from algorithms import point_to_segment_distance
+            dist_m = point_to_segment_distance(start_lng, start_lat, end_lng, end_lat, rz_lng, rz_lat)
+
+            # 雨区半径判定为 600 米（前端视觉大概是这个范围，放宽一点增加触发率）
+            if dist_m <= 600.0:
+                rain_collision = True
+                print(f"⚠️ 触发天气炸弹碰撞检测！距离雨区中心 {dist_m:.1f} 米")
+
+    # 1. 计算评分 (🌟 把 rain_collision 传进去)
+    drone_result = calculate_medical_score(resource, "DRONE", rain_collision)
+    ambulance_result = calculate_medical_score(resource, "AMBULANCE", rain_collision)
+
+    # 2. 顶层推荐方案（True = 推荐无人机）
+    recommend_drone = drone_result["score"] > ambulance_result["score"]
+    if request.forced_type in {"DRONE", "AMBULANCE"}:
+        recommend_drone = request.forced_type == "DRONE"
 
     total_distance_km = 0.0
     assigned_altitude = 0.0
@@ -488,6 +505,7 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
         route_type=chosen_type,
         distance_km=total_distance_km,
         bad_weather=bad_weather,
+        rain_collision=rain_collision,
     )
     # ================================
     #   持久化：调度任务 / 风险事件 / 决策日志

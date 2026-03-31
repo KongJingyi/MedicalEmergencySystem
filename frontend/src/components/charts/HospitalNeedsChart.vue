@@ -1,11 +1,15 @@
 <template>
-    <div class="chart-container">
-      <div class="chart-header">
-        <span class="pulse-dot"></span>
-        <h3>{{ hospitalName || '全市' }} 实时物资缺口</h3>
+  <div class="chart-container">
+    <div class="chart-header">
+      <span class="pulse-dot"></span>
+      <div class="header-text">
+        <h3 class="title">{{ hospitalName || '全市' }} 物资缺口</h3>
+        <div class="subtitle">数据源：后端实时缺口矩阵</div>
       </div>
-      <div ref="chartRef" class="echarts-box"></div>
+      <div class="header-chip">NEEDS</div>
     </div>
+    <div ref="chartRef" class="echarts-box"></div>
+  </div>
   </template>
   
   <script setup>
@@ -43,24 +47,47 @@
     const values = sortedData.map(item => item[1])
   
     const option = {
-      // 🌟 1. 增加 Tooltip，鼠标放上去可以看到完整长名字
+      backgroundColor: 'transparent',
+      // 🌟 Tooltip：悬浮展示完整名称与缺口
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'shadow' }
+        axisPointer: {
+          type: 'shadow',
+          shadowStyle: { color: 'rgba(0, 210, 255, 0.10)' },
+        },
+        backgroundColor: 'rgba(0, 8, 18, 0.92)',
+        borderColor: 'rgba(0, 210, 255, 0.35)',
+        borderWidth: 1,
+        textStyle: { color: 'rgba(255,255,255,0.92)', fontFamily: "'Rajdhani', sans-serif" },
+        extraCssText: 'box-shadow: 0 0 18px rgba(0,210,255,0.20);',
+        formatter: (params) => {
+          const p = Array.isArray(params) ? params[0] : params
+          const name = p?.name ?? ''
+          const v = p?.value ?? 0
+          return `<div style="font-weight:700; color:#00d2ff; margin-bottom:6px;">${name}</div>
+                  <div style="display:flex; gap:10px; align-items:baseline;">
+                    <span style="color:rgba(255,255,255,0.75);">缺口</span>
+                    <span style="font-family:Orbitron, monospace; font-weight:800; color:#ff7875;">${v}</span>
+                  </div>`
+        },
       },
       grid: {
-        left: '3%',
-        right: '12%',
-        bottom: '5%',
-        top: '5%',
-        containLabel: true
+        left: 10,
+        right: 18,
+        bottom: 8,
+        top: 10,
+        containLabel: true,
       },
       xAxis: {
         type: 'value',
-        splitLine: { show: false }, // 隐藏网格线
-        axisLabel: { show: false }, // 隐藏 X 轴刻度
         axisLine: { show: false },
-        axisTick: { show: false }
+        axisTick: { show: false },
+        axisLabel: { show: false },
+        splitNumber: 4,
+        splitLine: {
+          show: true,
+          lineStyle: { color: 'rgba(0, 210, 255, 0.10)', type: 'dashed' },
+        },
       },
       yAxis: {
         type: 'category',
@@ -68,50 +95,58 @@
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {
-          color: 'rgba(255, 255, 255, 0.85)',
+          color: 'rgba(255, 255, 255, 0.86)',
           fontSize: 12,
-          fontWeight: 'bold',
+          fontWeight: 600,
           fontFamily: "'Rajdhani', sans-serif",
-          // 🌟 2. 核心修改：截断过长的名字
-          formatter: function (value) {
-            // 如果名字超过 10 个字，就截断并加上省略号
-            return value.length > 10 ? value.substring(0, 10) + '...' : value;
-          }
-        }
+          margin: 14,
+          // 🌟 截断过长名称（悬浮 tooltip 看全名）
+          formatter: (value) => (value.length > 12 ? value.substring(0, 12) + '…' : value),
+        },
       },
       series: [
         {
+          name: '缺口',
           type: 'bar',
           data: values,
-          barWidth: '40%', // 柱子宽度
-          showBackground: true, // 开启背景槽
+          barWidth: values.length >= 8 ? 10 : 14,
+          barCategoryGap: '45%',
+          showBackground: true,
           backgroundStyle: {
-            color: 'rgba(0, 210, 255, 0.05)', // 科技感背景槽
-            borderRadius: [0, 10, 10, 0]
+            color: 'rgba(0, 210, 255, 0.06)',
+            borderRadius: [0, 10, 10, 0],
           },
           itemStyle: {
             borderRadius: [0, 10, 10, 0],
-            // 炫酷的霓虹红渐变色
             color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-              { offset: 0, color: '#ff4d4f' }, // 危险红
-              { offset: 1, color: '#ff7875' }  // 亮红
+              { offset: 0, color: 'rgba(255, 77, 79, 0.40)' },
+              { offset: 0.35, color: '#ff4d4f' },
+              { offset: 1, color: '#ffb3b5' },
             ]),
-            shadowBlur: 10,
-            shadowColor: 'rgba(255, 77, 79, 0.5)'
+            shadowBlur: 18,
+            shadowColor: 'rgba(255, 77, 79, 0.28)',
+          },
+          emphasis: {
+            itemStyle: {
+              shadowBlur: 28,
+              shadowColor: 'rgba(255, 77, 79, 0.55)',
+            },
           },
           label: {
             show: true,
-            position: 'right', // 数字显示在柱子右侧
-            color: '#ff7875',
-            fontSize: 14,
-            fontWeight: 'bold',
+            position: 'right',
+            distance: 8,
+            color: 'rgba(255, 190, 190, 0.95)',
+            fontSize: 12,
+            fontWeight: 800,
             fontFamily: "'Orbitron', monospace",
-            formatter: '{c}' // 显示具体数值
+            formatter: '{c}',
           },
-          animationDuration: 1000,
-          animationEasing: 'cubicOut'
-        }
-      ]
+          animationDuration: 900,
+          animationEasing: 'cubicOut',
+          animationDelay: (idx) => idx * 40,
+        },
+      ],
     }
   
     myChart.value.setOption(option)
@@ -159,10 +194,11 @@
   .chart-container {
     width: 100%;
     height: 300px;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(0, 210, 255, 0.2);
+    background:
+      radial-gradient(900px 240px at 12% 0%, rgba(0, 210, 255, 0.08), transparent 55%),
+      radial-gradient(800px 220px at 90% 20%, rgba(255, 77, 79, 0.06), transparent 60%);
     border-radius: 8px;
-    padding: 15px;
+    padding: 10px 12px 12px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -171,8 +207,8 @@
   .chart-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 10px;
+    gap: 10px;
+    margin-bottom: 8px;
   }
   
   .pulse-dot {
@@ -184,12 +220,32 @@
     animation: pulse 1.5s infinite;
   }
   
-  .chart-header h3 {
+  .header-text { display: flex; flex-direction: column; gap: 2px; }
+  .title {
     margin: 0;
-    color: #00d2ff;
-    font-size: 15px;
-    font-family: 'Rajdhani', sans-serif;
+    color: rgba(255,255,255,0.92);
+    font-size: 14px;
+    font-family: 'Orbitron', 'Rajdhani', sans-serif;
     letter-spacing: 1px;
+    text-shadow: 0 0 14px rgba(0,210,255,0.25);
+  }
+  .subtitle {
+    color: rgba(0,210,255,0.65);
+    font-size: 11px;
+    font-family: 'Rajdhani', sans-serif;
+    letter-spacing: 0.5px;
+  }
+  .header-chip{
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    font-family: 'Orbitron', monospace;
+    color: rgba(0,210,255,0.95);
+    border: 1px solid rgba(0,210,255,0.28);
+    background: rgba(0, 210, 255, 0.10);
+    box-shadow: 0 0 14px rgba(0, 210, 255, 0.18);
   }
   
   .echarts-box {

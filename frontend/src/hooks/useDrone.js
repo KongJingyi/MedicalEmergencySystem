@@ -104,6 +104,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     let endNode = '北京积水潭医院'
     let vehicleId = null
     let forcedType = null
+    let rainZone = null // 🌟 1. 新增接收天气参数
 
     if (
       startNodeOrOptions &&
@@ -115,6 +116,7 @@ export function useDrone(viewerRef, hospitalPressure) {
       endNode = startNodeOrOptions.endNode ?? endNode
       vehicleId = startNodeOrOptions.vehicleId ?? null
       forcedType = startNodeOrOptions.forcedType ?? null
+      rainZone = startNodeOrOptions.rainZone ?? null // 🌟 2. 提取天气参数
     } else {
       // 写法 2：两个字符串
       startNode = startNodeOrOptions ?? startNode
@@ -122,16 +124,20 @@ export function useDrone(viewerRef, hospitalPressure) {
     }
 
     try {
-      console.log(`🚀 发起请求: 起点=${startNode}, 终点=${endNode}`)
+      console.log(`🚀 发起请求: 起点=${startNode}, 终点=${endNode}, 雨区=${rainZone ? '有' : '无'}`)
 
-      // 调用后端路径规划接口，获取配送方式推荐（无人机/车辆）
-      const res = await axios.post('http://127.0.0.1:8000/api/plan_route', {
+      // 🌟 3. 将雨区坐标打包发给后端 API
+      const payload = {
         resource_id: resource.id,
         start_node: startNode,
         end_node: endNode,
         vehicle_id: vehicleId,
         forced_type: forcedType,
-      })
+        rain_zone: rainZone, // 传给后端，格式为 { lng: 116.x, lat: 39.x } 或 null
+      }
+
+      // 调用后端路径规划接口，获取配送方式推荐（无人机/车辆）
+      const res = await axios.post('http://127.0.0.1:8000/api/plan_route', payload)
 
       const result = res.data
       const isDrone = result.recommend
