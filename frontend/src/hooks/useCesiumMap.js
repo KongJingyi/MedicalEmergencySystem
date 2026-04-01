@@ -14,33 +14,6 @@ export const LOCATIONS = {
 const hospitalSource = new Cesium.CustomDataSource('hospitals')
 const roadNodeSource = new Cesium.CustomDataSource('roadNodes')
 
-// 🛠️ 升级版辅助函数：同时调整经纬度和高度
-// longitudeOffset / latitudeOffset 单位：弧度；heightOffset 单位：米
-function updateTilesetLocation(tileset, longitudeOffset, latitudeOffset, heightOffset) {
-  const center = tileset.boundingSphere.center;
-  const cartographic = Cesium.Cartographic.fromCartesian(center);
-  
-  const surface = Cesium.Cartesian3.fromRadians(
-    cartographic.longitude,
-    cartographic.latitude,
-    cartographic.height
-  );
-  
-  const offset = Cesium.Cartesian3.fromRadians(
-    cartographic.longitude + longitudeOffset, // 经度偏移 (弧度)
-    cartographic.latitude + latitudeOffset,   // 纬度偏移 (弧度)
-    cartographic.height + heightOffset        // 高度偏移 (米)
-  );
-  
-  const translation = Cesium.Cartesian3.subtract(
-    offset,
-    surface,
-    new Cesium.Cartesian3()
-  );
-  
-  tileset.modelMatrix = Cesium.Matrix4.fromTranslation(translation);
-}
-
 export function useCesiumMap() {
   // 使用 shallowRef 存储 viewer（Cesium 实例是复杂对象，浅响应足够）
   const viewerRef = shallowRef(null)
@@ -206,93 +179,7 @@ export function useCesiumMap() {
     // 🔍 性能监控：在左上角显示 FPS，方便观察 30+ 载具场景下的帧率表现
     viewer.scene.debugShowFramesPerSecond = true;
 
-    // 4. 🌟 加载本地购买的真实北京 3D Tiles
-    try {
-      console.log("正在加载本地 3D 北京模型...");
-
-      // 关键 1：开启地球 (作为地基，否则模型会悬浮在黑洞里)
-      viewer.scene.globe.show = true;
-
-      // 关键 2：加载 tileset.json
-      // 这里的路径 '/Beijing3D/tileset.json' 对应你 public 下的文件夹名
-      const cityTileset = await Cesium.Cesium3DTileset.fromUrl(
-        '/Beijing3D/tileset.json',
-        {
-          maximumScreenSpaceError: 10, // 数值越小越精细，但越吃显卡（默认16）
-          maximumMemoryUsage: 2048,    // 允许最大显存 2GB
-          skipLevelOfDetail: true,     // 优化加载速度
-          baseScreenSpaceError: 1024,
-          skipScreenSpaceErrorFactor: 16,
-          skipLevels: 1
-        }
-      );
-
-      // ⭐ CustomShader：在保留原始纹理的基础上叠加“全息蓝光扫描 + 呼吸边缘光”效果
-      const hologramShader = new Cesium.CustomShader({
-        // 使用 PBR/光照，但通过 emissive 叠加高科技光效
-        lightingModel: Cesium.LightingModel.PBR,
-        fragmentShaderText: `
-        void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-          // 世界坐标高度（近似用于竖直方向渐变）
-          float height = fsInput.attributes.positionWC.z;
-
-          // 归一化高度（用于从底部到高层渐变），这里做一个简单的缩放
-          float hNorm = clamp((height - 0.0) / 200.0, 0.0, 1.0);
-
-          // 全局时间（使用帧号近似，避免传 uniform）
-          float t = float(czm_frameNumber) * 0.02;
-
-          // === 1. 底部全息扫描带 ===
-          // 利用高度 + 时间做一条向上移动的扫描带
-          float band = fract(hNorm * 4.0 + t);
-          float scan = smoothstep(0.0, 0.15, band) * (1.0 - smoothstep(0.7, 1.0, band));
-
-          // === 2. 高层建筑边缘呼吸光 ===
-          // 根据法线与竖直方向的夹角，提取“边缘”区域
-          vec3 n = normalize(fsInput.attributes.normalEC);
-          float edge = 1.0 - abs(dot(n, vec3(0.0, 0.0, 1.0)));
-          // 高层区域权重
-          float highLayer = smoothstep(0.4, 1.0, hNorm);
-          // 呼吸节奏
-          float breathing = 0.5 + 0.5 * sin(t * 6.28318);
-
-          // 全息蓝色
-          vec3 holoColor = vec3(0.0, 0.8, 1.2);
-
-          // 底部扫描：主要增强建筑下半部分的发光
-          float scanIntensity = scan * (1.0 - hNorm);
-          // 边缘呼吸：主要作用在高层轮廓
-          float edgeGlow = edge * highLayer * breathing;
-
-          // 通过 emissive 叠加，不修改原始 diffuse/纹理
-          material.emissive += holoColor * (scanIntensity * 1.2 + edgeGlow * 0.5);
-
-          // 轻微提高整体发光，让画面偏“赛博蓝”
-          material.emissive += holoColor * 0.05;
-        }`
-      });
-
-      cityTileset.customShader = hologramShader;
-
-      // 关键 3：添加到场景
-      viewer.scene.primitives.add(cityTileset);
-
-      // 关键 4：飞过去看看！
-      // 这一步很重要，因为有时候买的数据坐标系不对，用 zoomTo 能直接定位到模型位置
-      viewer.zoomTo(cityTileset);
-
-      // 关键 5：位置对齐：经度 / 纬度 / 高度 三个维度（初始值，可用键盘再微调）
-      updateTilesetLocation(
-        cityTileset,
-        0.0,  // longitudeOffset 经度偏移（弧度）
-        0.0,  // latitudeOffset  纬度偏移（弧度）
-        0.0   // heightOffset    高度偏移（米）
-      );
-
-      console.log("✅ 真实北京城加载成功！");
-    } catch (error) {
-      console.error("❌ 加载 3D 模型失败，请检查 public 路径:", error);
-    }
+    // 4. 城市 3D Tiles 由 App.vue 中的 useTilesetManager 统一加载，避免重复添加模型
 
     // 5. 设置相机初始视角
     viewer.camera.flyTo({

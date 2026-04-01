@@ -4,7 +4,9 @@ from typing import Dict, List, Optional
 import json
 import math
 import os
+import sys
 import time
+import importlib.util
 import requests  # 🌟 新增：用于调用高德API
 
 # --- 🌟 新增：中国地图坐标系纠偏算法 (GCJ-02 to WGS-84) ---
@@ -119,6 +121,61 @@ LOCATION_MAPPING = {
     "START": "西直门桥",
     "END": "东直门桥",
 }
+
+_ASTAR_MODULE = None
+
+
+def _load_astar_module():
+    global _ASTAR_MODULE
+    if _ASTAR_MODULE is not None:
+        return _ASTAR_MODULE
+
+    module_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "routing", "path_astar.py")
+    )
+    module_dir = os.path.dirname(module_path)
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
+    spec = importlib.util.spec_from_file_location("path_astar_module", module_path)
+    if not spec or not spec.loader:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _ASTAR_MODULE = module
+    return _ASTAR_MODULE
+
+
+def _compute_route_astar(start_name: str, end_name: str) -> List[Dict]:
+    """
+    A* 路径规划（主路径）。如加载失败则回退旧算法。
+    """
+    astar_module = _load_astar_module()
+    if not astar_module:
+        return compute_route(start_name, end_name)
+
+    weather = "sunny"
+    try:
+        from algorithms import get_weather
+        weather = get_weather()
+    except Exception:
+        pass
+
+    nodes_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "road_nodes.json"))
+    edges_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "road_graph.json"))
+
+    try:
+        path = astar_module.compute_route_astar(
+            start_name=start_name,
+            end_name=end_name,
+            nodes_file=nodes_file,
+            edges_file=edges_file,
+            weather=weather,
+            traffic="green",
+        )
+        return path or []
+    except Exception as e:
+        print(f"⚠️ A* 路径规划失败，回退旧算法: {e}")
+        return compute_route(start_name, end_name)
 
 
 # ================================
@@ -447,7 +504,7 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
         # 4. 🌟 实施“水陆双轨制”真实寻路！
         if recommend_drone:
             # 【无人机路线】：走直线/简易拓扑图，拉高高度
-            path_points = compute_route(real_start, real_end)
+            path_points = _compute_route_astar(real_start, real_end)
             path = [[p["lng"], p["lat"]] for p in path_points]
             assigned_altitude = _allocate_drone_altitude()  # 动态分配高空航道
         else:
@@ -460,7 +517,7 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
                 path = get_amap_driving_route(start_lng, start_lat, end_lng, end_lat)
             else:
                 # 兜底：如果找不到坐标，用原来的简易路网
-                path_points = compute_route(real_start, real_end)
+                path_points = _compute_route_astar(real_start, real_end)
                 path = [[p["lng"], p["lat"]] for p in path_points]
 
             assigned_altitude = 0.0  # 救护车高度分配为0 (前端会垫高2米)

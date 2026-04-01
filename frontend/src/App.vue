@@ -10,17 +10,21 @@ import ViewSwitch from './components/ViewSwitch.vue'
 import HUDOverlay from './components/HUDOverlay.vue'
 import AlarmModal from './components/AlarmModal.vue'
 import BottomPanel from './components/BottomPanel.vue'
+import DecisionReport from './components/ui/DecisionReport.vue'
 
 // 引入Cesium地图和无人机相关的hook
 import { useCesiumMap } from './hooks/useCesiumMap'
 import { useDrone } from './hooks/useDrone'
 import { useAudio } from './hooks/useAudio'
 import { useLocalWeather } from './hooks/useLocalWeather'
+import { useTilesetManager } from './hooks/useTilesetManager'
+import { useTrafficLayer } from './hooks/useTrafficLayer'
 
 const resources = ref([])
 const hospitals = ref([])
 const hospitalPressure = ref(0)
 const bottomPanelRef = ref(null)
+const decisionReportRef = ref(null)
 const viewMode = ref('2d')
 const showPanels = ref(true)
 const showHospitals = ref(true)
@@ -100,6 +104,7 @@ const fleetStats = computed(() => {
 })
 
 const { viewerRef, initMap, toggleLayer } = useCesiumMap()
+const { isTrafficVisible, toggleTrafficLayer } = useTrafficLayer(viewerRef)
 const {
   activeDroneEntity,
   dispatch: droneDispatch,
@@ -173,13 +178,17 @@ const executeDispatch = async (vehicle, startNode) => {
     vehicle.status = '任务中'
 
     // 调用底层渲染
-    await droneDispatch(selectedResource.value, { 
+    const result = await droneDispatch(selectedResource.value, {
       startNode: startNode, 
       endNode: target,
       forcedType: forcedType,
       vehicleId: vehicle.id,
       rainZone: currentRainZone.value,
     })
+
+    if (result && result.analysis) {
+      decisionReportRef.value?.showReport(result)
+    }
 
     // 动态扣减医院缺口数据
     if (hospitalNeeds.value[target] && hospitalNeeds.value[target][resName] !== undefined) {
@@ -231,8 +240,22 @@ const handleViewChange = (mode) => { viewMode.value = mode }
 const togglePanels = () => { showPanels.value = !showPanels.value }
 const handleSystemAlarm = (e) => { const d = e.detail || {}; triggerAlarm(d.message, d.type, d.batteryLevel) }
 
-onMounted(() => {
-  initMap('cesiumContainer')
+onMounted(async () => {
+  await initMap('cesiumContainer')
+  const { loadOptimizedCityModel } = useTilesetManager(viewerRef)
+  console.log("正在加载优化版 3D Tiles 城市模型...")
+  const cloudTileset = await loadOptimizedCityModel(4589530, false)
+  if (cloudTileset) {
+    console.log("云端模型加载完毕！")
+  } else {
+    console.warn("云端模型加载失败，回退到本地 /Beijing3D/tileset.json ...")
+    const localTileset = await loadOptimizedCityModel('/Beijing3D/tileset.json', true)
+    if (localTileset) {
+      console.log("本地模型加载完毕！")
+    } else {
+      console.error("云端与本地模型均加载失败，请检查 Token/Asset 权限或本地模型目录。")
+    }
+  }
   fetchResources()
   fetchHospitals()
   fetchHospitalNeeds()
@@ -278,7 +301,11 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
       <label class="layer-switch"><input type="checkbox" v-model="showRoadNodes" @change="toggleLayer('road', showRoadNodes)"/> <span>路网节点</span></label>
     </div>
 
-    <ViewSwitch @change="handleViewChange" />
+    <ViewSwitch
+      :traffic-active="isTrafficVisible"
+      @change="handleViewChange"
+      @toggle-traffic="toggleTrafficLayer"
+    />
     <button
       v-if="activeDroneEntity"
       class="unlock-view-btn"
@@ -375,6 +402,7 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
         <BottomPanel ref="bottomPanelRef" />
       </div>
     </div>
+    <DecisionReport ref="decisionReportRef" />
   </div>
 </template>
 

@@ -20,6 +20,17 @@
         <span class="btn-icon">🚁</span>
         <span class="btn-text">驾驶舱</span>
       </button>
+
+      <div class="switch-divider"></div>
+
+      <button
+        class="switch-btn"
+        :class="{ active: trafficActive }"
+        @click="toggleTraffic"
+      >
+        <span class="btn-icon">🚦</span>
+        <span class="btn-text">路况</span>
+      </button>
     </div>
     
     <div class="switch-status">
@@ -33,7 +44,14 @@
 import { ref } from 'vue'
 import { useAudio } from '../hooks/useAudio'
 
-const emit = defineEmits(['change'])
+const props = defineProps({
+  trafficActive: {
+    type: Boolean,
+    default: false,
+  },
+})
+
+const emit = defineEmits(['change', 'toggle-traffic'])
 
 const { playClick } = useAudio()
 
@@ -43,6 +61,11 @@ const switchMode = (mode) => {
   playClick()
   viewMode.value = mode
   emit('change', mode)
+}
+
+const toggleTraffic = () => {
+  playClick()
+  emit('toggle-traffic')
 }
 
 defineExpose({ viewMode })

@@ -232,12 +232,15 @@ export function useDrone(viewerRef, hospitalPressure) {
 
         // 启动！
         createAndFly(isDrone, resource.id, pathWithAltitude)
+        return result
       } else {
         alert('后端未返回有效路径！请检查路网配置。')
+        return null
       }
     } catch (error) {
       console.error("资源调度路径规划请求失败:", error);
       alert("调度失败！路径规划接口异常，请检查后端服务是否正常运行");
+      return null
     }
   }
 
