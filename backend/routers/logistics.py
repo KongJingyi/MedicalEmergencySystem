@@ -185,6 +185,7 @@ def _compute_route_astar(start_name: str, end_name: str) -> List[Dict]:
 
 _ROAD_NODES_CACHE: Optional[List[Dict]] = None
 _VEHICLES_CACHE: Optional[List[Dict]] = None
+_ROAD_NODE_BY_NAME_CACHE: Optional[Dict[str, Dict]] = None
 
 
 def _load_road_nodes() -> List[Dict]:
@@ -197,6 +198,15 @@ def _load_road_nodes() -> List[Dict]:
     except Exception:
         _ROAD_NODES_CACHE = []
     return _ROAD_NODES_CACHE
+
+
+def _load_road_node_by_name() -> Dict[str, Dict]:
+    global _ROAD_NODE_BY_NAME_CACHE
+    if _ROAD_NODE_BY_NAME_CACHE is not None:
+        return _ROAD_NODE_BY_NAME_CACHE
+    nodes = _load_road_nodes()
+    _ROAD_NODE_BY_NAME_CACHE = {str(n.get("name")): n for n in nodes if n.get("name")}
+    return _ROAD_NODE_BY_NAME_CACHE
 
 
 def _load_vehicles() -> List[Dict]:
@@ -238,6 +248,25 @@ def _nearest_road_node_name(lng: float, lat: float) -> Optional[str]:
     return best_name
 
 
+def _parse_lng_lat_text(text: str) -> Optional[tuple]:
+    """
+    解析 "lng,lat" 字符串，成功则返回 (lng, lat)。
+    """
+    if not text or "," not in text:
+        return None
+    try:
+        parts = [p.strip() for p in text.split(",")]
+        if len(parts) != 2:
+            return None
+        lng = float(parts[0])
+        lat = float(parts[1])
+        if not (-180.0 <= lng <= 180.0 and -90.0 <= lat <= 90.0):
+            return None
+        return (lng, lat)
+    except Exception:
+        return None
+
+
 def _resolve_to_road_node(name: str, session: Session) -> str:
     """
     将传入的业务名称解析为 road_nodes.json 中存在的节点名：
@@ -245,20 +274,35 @@ def _resolve_to_road_node(name: str, session: Session) -> str:
     - 再尝试把 name 当作医院名，从 Hospital 表查坐标并吸附最近路网节点
     - 最后返回原名（由 compute_route 决定是否可用）
     """
-    mapped = LOCATION_MAPPING.get(name, name)
+    node_map = _load_road_node_by_name()
+    candidates: List[str] = []
+    for c in [name, LOCATION_MAPPING.get(name, name)]:
+        if c and c not in candidates:
+            candidates.append(c)
 
-    # 如果映射后与原名不同，优先返回映射结果
-    if mapped != name:
-        return mapped
+    # 1) 传入的是坐标字符串 "lng,lat" -> 最近路网节点
+    for c in candidates:
+        lng_lat = _parse_lng_lat_text(c)
+        if lng_lat:
+            nearest = _nearest_road_node_name(lng_lat[0], lng_lat[1])
+            if nearest:
+                return nearest
 
-    # 尝试按医院名查坐标并吸附最近路网节点
-    hosp = session.exec(select(Hospital).where(Hospital.name == name)).first()
-    if hosp:
-        nearest = _nearest_road_node_name(hosp.lng, hosp.lat)
-        if nearest:
-            return nearest
+    # 2) 传入值本身就是路网节点名（如 bj_123）
+    for c in candidates:
+        if c in node_map:
+            return c
 
-    return name
+    # 3) 按医院名查坐标再吸附
+    for c in candidates:
+        hosp = session.exec(select(Hospital).where(Hospital.name == c)).first()
+        if hosp:
+            nearest = _nearest_road_node_name(hosp.lng, hosp.lat)
+            if nearest:
+                return nearest
+
+    # 4) 保持兼容：让下游算法兜底
+    return candidates[0] if candidates else name
 
 
 # ================================
@@ -311,16 +355,25 @@ def _get_coords_by_name(name: str, session: Session):
     """
     mapped_name = LOCATION_MAPPING.get(name, name)
 
+    # 0. 允许前端直接传 "lng,lat"
+    lng_lat = _parse_lng_lat_text(name)
+    if lng_lat:
+        return lng_lat
+
+    lng_lat = _parse_lng_lat_text(mapped_name)
+    if lng_lat:
+        return lng_lat
+
     # 1. 尝试从医院表获取精确坐标
     hosp = session.exec(select(Hospital).where(Hospital.name == mapped_name)).first()
     if hosp:
         return hosp.lng, hosp.lat
 
-    # 2. 尝试从路网节点 json 获取桥梁坐标
-    nodes = _load_road_nodes()
-    for n in nodes:
-        if n["name"] == mapped_name:
-            return float(n["lng"]), float(n["lat"])
+    # 2. 尝试从路网节点 json 获取节点坐标
+    node_map = _load_road_node_by_name()
+    node = node_map.get(mapped_name) or node_map.get(name)
+    if node:
+        return float(node["lng"]), float(node["lat"])
 
     return None, None
 
@@ -329,8 +382,11 @@ def get_amap_driving_route(start_lng, start_lat, end_lng, end_lat):
     """
     调用高德地图 Web服务 API，获取真实的驾车轨迹点阵
     """
-    # 🚨🚨🚨 把这里换成你申请的【Web服务】Key！
-    api_key = os.getenv("AMAP_API_KEY") or "ba6be5f0432f0fd06747f2ce5d8aae45"
+    # 必须通过环境变量提供 Web 服务 Key，禁止硬编码进仓库
+    api_key = os.getenv("AMAP_API_KEY")
+    if not api_key:
+        print("⚠️ 未配置环境变量 AMAP_API_KEY，将跳过高德寻路并回退到本地路网 compute_route。")
+        return []
 
     url = (
         "https://restapi.amap.com/v3/direction/driving"
@@ -675,15 +731,15 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     }
 
 @router.post("/route")
-def route(request: RouteRequest):
+def route(request: RouteRequest, session: Session = Depends(get_session)):
     """
     简单路径接口
     """
-    real_start = LOCATION_MAPPING.get(request.start_node, request.start_node)
-    real_end = LOCATION_MAPPING.get(request.end_node, request.end_node)
+    real_start = _resolve_to_road_node(request.start_node, session)
+    real_end = _resolve_to_road_node(request.end_node, session)
     
     try:
-        path_points = compute_route(real_start, real_end)
+        path_points = _compute_route_astar(real_start, real_end)
         return {"path_points": path_points}
     except:
         return {"path_points": []}
