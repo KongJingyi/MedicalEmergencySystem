@@ -2,7 +2,12 @@ import heapq
 import math
 from typing import Dict, List, Optional
 
-from graph_builder import TrafficGraph
+try:
+    # 作为包导入：python -m routing.path_astar
+    from .graph_builder import TrafficGraph  # type: ignore
+except Exception:
+    # 作为脚本/动态加载导入：兼容现有 importlib 加载方式
+    from graph_builder import TrafficGraph  # type: ignore
 
 
 def haversine_distance(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
