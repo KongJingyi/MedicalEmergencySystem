@@ -9,6 +9,7 @@ import sys
 import time
 import importlib.util
 import requests  # 🌟 新增：用于调用高德API
+import re
 
 # --- 🌟 新增：中国地图坐标系纠偏算法 (GCJ-02 to WGS-84) ---
 # 定义椭球体参数
@@ -188,12 +189,17 @@ _VEHICLES_CACHE: Optional[List[Dict]] = None
 _ROAD_NODE_BY_NAME_CACHE: Optional[Dict[str, Dict]] = None
 
 
+def _data_file_path(filename: str) -> str:
+    # 使用绝对路径，避免从不同工作目录启动服务时读不到 data/*
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", filename))
+
+
 def _load_road_nodes() -> List[Dict]:
     global _ROAD_NODES_CACHE
     if _ROAD_NODES_CACHE is not None:
         return _ROAD_NODES_CACHE
     try:
-        with open("data/road_nodes.json", "r", encoding="utf-8") as f:
+        with open(_data_file_path("road_nodes.json"), "r", encoding="utf-8") as f:
             _ROAD_NODES_CACHE = json.load(f)
     except Exception:
         _ROAD_NODES_CACHE = []
@@ -214,7 +220,7 @@ def _load_vehicles() -> List[Dict]:
     if _VEHICLES_CACHE is not None:
         return _VEHICLES_CACHE
     try:
-        with open("data/vehicles.json", "r", encoding="utf-8") as f:
+        with open(_data_file_path("vehicles.json"), "r", encoding="utf-8") as f:
             _VEHICLES_CACHE = json.load(f)
     except Exception:
         _VEHICLES_CACHE = []
@@ -267,6 +273,43 @@ def _parse_lng_lat_text(text: str) -> Optional[tuple]:
         return None
 
 
+def _normalize_place_name(name: str) -> str:
+    """
+    前端下拉框的医院/院区名可能存在：
+    - 全角/半角括号差异 （） vs ()
+    - 多余空格/不可见空白
+    - 标点差异
+    做一次轻量规范化，提升解析成功率（不做真正的模糊匹配，避免误吸附）。
+    """
+    s = str(name or "")
+    s = s.replace("（", "(").replace("）", ")")
+    # 去掉所有空白字符（包括全角空格/不可见空白）
+    s = re.sub(r"\s+", "", s)
+    return s
+
+
+def _find_hospital_by_name(session: Session, name: str) -> Optional[Hospital]:
+    """
+    优先精确匹配；精确匹配失败时，使用规范化后的名称做一次兜底匹配。
+    """
+    if not name:
+        return None
+    hosp = session.exec(select(Hospital).where(Hospital.name == name)).first()
+    if hosp:
+        return hosp
+
+    n = _normalize_place_name(name)
+    if not n:
+        return None
+
+    # 兜底：在少量医院数据内做规范化比对
+    hospitals = session.exec(select(Hospital)).all()
+    for h in hospitals:
+        if _normalize_place_name(h.name) == n:
+            return h
+    return None
+
+
 def _resolve_to_road_node(name: str, session: Session) -> str:
     """
     将传入的业务名称解析为 road_nodes.json 中存在的节点名：
@@ -295,9 +338,26 @@ def _resolve_to_road_node(name: str, session: Session) -> str:
 
     # 3) 按医院名查坐标再吸附
     for c in candidates:
-        hosp = session.exec(select(Hospital).where(Hospital.name == c)).first()
+        hosp = _find_hospital_by_name(session, c)
         if hosp:
             nearest = _nearest_road_node_name(hosp.lng, hosp.lat)
+            if nearest:
+                return nearest
+
+    # 3.5) 常用“桥/调度点”等不在 OSM 节点表里的业务名称：用预置坐标吸附
+    BRIDGE_COORDS: Dict[str, tuple] = {
+        "西直门桥": (116.3557, 39.9407),
+        "北展桥": (116.3427, 39.9387),
+        "复兴门桥": (116.3566, 39.9071),
+        "建国门桥": (116.4363, 39.9089),
+        "东直门桥": (116.4339, 39.9408),
+        "调度中心": (116.3538, 39.9337),
+        "目标医院": (116.3725, 39.9468),
+    }
+    for c in candidates:
+        if c in BRIDGE_COORDS:
+            lng, lat = BRIDGE_COORDS[c]
+            nearest = _nearest_road_node_name(float(lng), float(lat))
             if nearest:
                 return nearest
 
@@ -365,13 +425,18 @@ def _get_coords_by_name(name: str, session: Session):
         return lng_lat
 
     # 1. 尝试从医院表获取精确坐标
-    hosp = session.exec(select(Hospital).where(Hospital.name == mapped_name)).first()
+    hosp = _find_hospital_by_name(session, mapped_name)
     if hosp:
         return hosp.lng, hosp.lat
 
     # 2. 尝试从路网节点 json 获取节点坐标
     node_map = _load_road_node_by_name()
     node = node_map.get(mapped_name) or node_map.get(name)
+    if not node:
+        # 兜底：规范化后再查一次（主要处理括号/空格差异）
+        norm_mapped = _normalize_place_name(mapped_name)
+        norm_name = _normalize_place_name(name)
+        node = node_map.get(norm_mapped) or node_map.get(norm_name)
     if node:
         return float(node["lng"]), float(node["lat"])
 
@@ -541,8 +606,12 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     print(f"🗺️ 路径规划: {request.start_node}({real_start}) -> {request.end_node}({real_end})")
 
     # 🌟 🌟 🌟 从这里开始插入碰撞检测逻辑 🌟 🌟 🌟
-    start_lng, start_lat = _get_coords_by_name(request.start_node, session)
-    end_lng, end_lat = _get_coords_by_name(request.end_node, session)
+    # 优先使用解析后的路网节点名获取坐标（避免“桥/医院业务名”在 OSM 节点表中不存在导致 None）
+    start_lng, start_lat = _get_coords_by_name(real_start, session)
+    end_lng, end_lat = _get_coords_by_name(real_end, session)
+    if not start_lng or not end_lng:
+        start_lng, start_lat = _get_coords_by_name(request.start_node, session)
+        end_lng, end_lat = _get_coords_by_name(request.end_node, session)
 
     rain_collision = False
     if request.rain_zone and start_lng and end_lng:
@@ -573,8 +642,11 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
 
     try:
         # 4. 实施“陆空双轨制”真实寻路！
-        start_lng, start_lat = _get_coords_by_name(request.start_node, session)
-        end_lng, end_lat = _get_coords_by_name(request.end_node, session)
+        start_lng, start_lat = _get_coords_by_name(real_start, session)
+        end_lng, end_lat = _get_coords_by_name(real_end, session)
+        if not start_lng or not end_lng:
+            start_lng, start_lat = _get_coords_by_name(request.start_node, session)
+            end_lng, end_lat = _get_coords_by_name(request.end_node, session)
 
         if recommend_drone:
             # ✈️【空中层：无人机 3D 避障算法】
@@ -594,6 +666,12 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
                 print(f"🚑 触发高德真实路网计算: ({start_lng},{start_lat}) -> ({end_lng},{end_lat})")
                 # 🌟 高德返回的只有 [lng, lat] 二维数组
                 path = get_amap_driving_route(start_lng, start_lat, end_lng, end_lat)
+
+                # ✅ 兜底：未配置 AMAP key / 高德失败时，回退本地路网（A* / Dijkstra）
+                if not path:
+                    local_path = _compute_route_astar(real_start, real_end)
+                    # _compute_route_astar 返回 [{lng,lat,...}]，转成前端需要的 [[lng,lat],...]
+                    path = [[p.get("lng"), p.get("lat")] for p in (local_path or []) if p.get("lng") is not None and p.get("lat") is not None]
             else:
                 path = []
 
