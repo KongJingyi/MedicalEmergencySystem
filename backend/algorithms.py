@@ -86,13 +86,34 @@ def get_speed_kmh(route_type: str) -> float:
 #  多因子决策评分（无人机 vs 救护车）
 # ===============================
 
-def calculate_medical_score(resource, route_type: str, rain_collision: bool = False) -> Dict:
+def calculate_medical_score(
+    resource,
+    route_type: str,
+    rain_collision: bool = False,
+    qty: int = 1,
+    bad_weather_override: float | None = None,
+) -> Dict:
     """
     核心算法：根据【物资属性 + 运输方式 + 天气】计算【路径得分】
 
     Score = 速度评分 * 0.4 + 防震评分 * 0.3 - 天气恶劣系数 * 0.2
     """
     logs: List[str] = []
+    weather = get_weather()
+
+    # 🚨 规则 1：极端天气强制禁飞
+    if route_type == "DRONE" and weather in ["snow", "fog"]:
+        logs.append(f"❌ 熔断机制：当前天气为 {weather}，触发全城禁飞令！")
+        return {"score": -999, "logs": logs, "bad_weather": 100.0}
+
+    # 🚨 规则 2：超重强制降级为救护车
+    # 假设无人机最大载重为 5.0 kg
+    total_weight = (getattr(resource, "weight_kg", 0.5) or 0.5) * max(1, int(qty or 1))
+    if route_type == "DRONE" and total_weight > 5.0:
+        logs.append(
+            f"❌ 熔断机制：总重量 {total_weight}kg 超过无人机最大载重(5kg)，强制转地面！"
+        )
+        return {"score": -999, "logs": logs, "bad_weather": 0.0}
 
     # 1. 速度评分：无人机更快（基础分）
     if route_type == "DRONE":
@@ -112,7 +133,6 @@ def calculate_medical_score(resource, route_type: str, rain_collision: bool = Fa
             logs.append("🌊 路况：途径局部暴雨区，地面极易内涝拥堵，救护车评分 -50")
 
     # 1.1 天气对速度/安全的影响（基于 CURRENT_WEATHER）
-    weather = get_weather()
     if route_type == "DRONE":
         if weather == "rain":
             speed_score -= 20
@@ -147,9 +167,15 @@ def calculate_medical_score(resource, route_type: str, rain_collision: bool = Fa
             f"⚠️ 震动：运输震动({vehicle_shock}) 高于物资耐受度({resource.shock_sensitivity})，存在风险，评分 {shock_score}"
         )
 
-    # 3. 天气恶劣系数：这里用随机数模拟，后续可接真实天气 API
-    bad_weather = random.uniform(0, 100)  # 0=晴朗，100=极端恶劣
-    logs.append(f"🌦 天气：模拟天气恶劣系数 {bad_weather:.1f}（0=晴朗，100=恶劣）")
+    # 3. 天气恶劣系数：
+    # - 同一次决策里，无人机/救护车必须使用同一个 bad_weather 才能公平比较
+    # - 这里允许上层传入 override（例如 plan_route 统一采样一次）
+    bad_weather = (
+        float(bad_weather_override)
+        if bad_weather_override is not None
+        else random.uniform(0, 100)
+    )
+    logs.append(f"🌦 天气：恶劣系数 {bad_weather:.1f}（0=晴朗，100=恶劣）")
 
     # 4. 紧急程度：越紧急越看重速度
     urgency_factor = 1.0 + (resource.urgency_level - 3) * 0.1  # Lv3 为基准，每级 ±10%
@@ -380,3 +406,45 @@ def evaluate_risks(
             )
 
     return warnings
+
+
+def generate_3d_drone_path(
+    start_lng: float,
+    start_lat: float,
+    end_lng: float,
+    end_lat: float,
+    cruise_alt: float,
+) -> List[Dict]:
+    """
+    🌟 核心：无人机 3D 避障航线生成算法
+    不再只是二维的起终点，而是包含 Z轴高度 的完整三维空间折线。
+    """
+    path = []
+
+    # 1. 垂直起飞 (从地面 0 米爬升到巡航高度)
+    path.append({"lng": start_lng, "lat": start_lat, "alt": 0.0})
+    path.append({"lng": start_lng, "lat": start_lat, "alt": cruise_alt})
+
+    # 2. 空间巡航与 3D 避障
+    # 我们把航线分成 20 段，在中间区域模拟遇到“超高层建筑/禁飞区”，飞机自动拉升高度避让
+    steps = 20
+    for i in range(1, steps):
+        t = i / steps
+        lng = start_lng + (end_lng - start_lng) * t
+        lat = start_lat + (end_lat - start_lat) * t
+
+        alt = cruise_alt
+        # 模拟避障：在路程 40% ~ 60% 处遇到障碍物，动态拉升 150 米
+        if 0.4 < t < 0.6:
+            alt = cruise_alt + 150.0
+        # 缓冲平滑过渡
+        elif 0.3 <= t <= 0.4 or 0.6 <= t <= 0.7:
+            alt = cruise_alt + 75.0
+
+        path.append({"lng": lng, "lat": lat, "alt": alt})
+
+    # 3. 垂直降落 (在目标点上空悬停，然后降落到地面)
+    path.append({"lng": end_lng, "lat": end_lat, "alt": cruise_alt})
+    path.append({"lng": end_lng, "lat": end_lat, "alt": 0.0})
+
+    return path

@@ -58,7 +58,19 @@
     { "from": 11, "to": 12, "distance_km": 4.0, "time_minutes": 8 },
     { "from": 12, "to": 11, "distance_km": 4.0, "time_minutes": 8 },
     { "from": 5, "to": 12, "distance_km": 5.0, "time_minutes": 10 },
-    { "from": 12, "to": 5, "distance_km": 5.0, "time_minutes": 10 }
+    { "from": 12, "to": 5, "distance_km": 5.0, "time_minutes": 10 },
+
+    { "from": 24, "to": 22, "distance_km": 31.0, "time_minutes": 45 },
+    { "from": 22, "to": 24, "distance_km": 31.0, "time_minutes": 45 },
+
+    { "from": 25, "to": 23, "distance_km": 36.0, "time_minutes": 52 },
+    { "from": 23, "to": 25, "distance_km": 36.0, "time_minutes": 52 },
+
+    { "from": 26, "to": 22, "distance_km": 47.0, "time_minutes": 68 },
+    { "from": 22, "to": 26, "distance_km": 47.0, "time_minutes": 68 },
+
+    { "from": 27, "to": 23, "distance_km": 39.0, "time_minutes": 56 },
+    { "from": 23, "to": 27, "distance_km": 39.0, "time_minutes": 56 }
   ],
-  "note": "已完美匹配北京二环24个节点，去除了所有非法注释。"
+  "note": "已扩展为二环+远郊收费站路网，共28个节点，支持医院-高速衔接。"
 }

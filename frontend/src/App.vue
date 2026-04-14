@@ -11,6 +11,7 @@ import HUDOverlay from './components/HUDOverlay.vue'
 import AlarmModal from './components/AlarmModal.vue'
 import BottomPanel from './components/BottomPanel.vue'
 import DecisionReport from './components/ui/DecisionReport.vue'
+// EventTimeline 已整合进 BottomPanel（指挥中心事件流）
 
 // 引入Cesium地图和无人机相关的hook
 import { useCesiumMap } from './hooks/useCesiumMap'
@@ -29,21 +30,25 @@ const viewMode = ref('2d')
 const showPanels = ref(true)
 const showHospitals = ref(true)
 const showRoadNodes = ref(true)
+const aiPreferTollStart = ref(true)
 
 const alarmVisible = ref(false)
 const alarmMessage = ref('')
 const alarmType = ref('')
 const alarmBatteryLevel = ref(null)
 const alarmTimestamp = ref('')
+const currentWeatherMode = ref('sunny')
+const systemLogs = ref([])
 
 // ================= 🌟 业务闭环核心状态 =================
 // 1. 表单双向绑定
-const selectedStartNode = ref('西直门桥') // 默认发货仓
+const selectedStartNode = ref('') // 默认发货仓（加载医院后自动赋值）
 const selectedEndNode = ref('') // 目标医院
 const selectedResource = ref(null) // 调拨物资
 const dispatchQuantity = ref(10) // 派发数量
 
 const hospitalNeeds = ref({})
+const tollStations = ref([])
 
 const currentNeeds = computed(() => {
   if (!selectedEndNode.value || !hospitalNeeds.value) return {}
@@ -81,18 +86,46 @@ const fetchHospitalNeeds = async () => {
   }
 }
 
-const startNodes = ['西直门桥', '北展桥', '复兴门桥', '建国门桥', '东直门桥', '德胜门桥']
+const startNodeGroups = computed(() => {
+  const hospitalNames = (hospitals.value || []).map(h => h.name).filter(Boolean)
+  const tollNames = (tollStations.value || []).map(n => n.name).filter(Boolean)
+  return { toll: tollNames, hospital: hospitalNames }
+})
+const startNodes = computed(() => {
+  // 先医院后收费站，保证医院名字始终优先可见
+  return [...startNodeGroups.value.hospital, ...startNodeGroups.value.toll]
+})
 
 // ================= 🌟 机队指挥中心状态 =================
 // 使用 reactive 让状态可变，真实模拟机队
+const pad2 = (n) => String(n).padStart(2, '0')
+const pick = (arr, idx) => arr[idx % arr.length]
+const jitter = (base, step, i) => base + step * ((i % 5) - 2) + (i % 3) * step * 0.15
+
+const generateFleet = (prefix, typeText, count, baseLon, baseLat) => {
+  const startPool = ['西直门桥', '北展桥', '复兴门桥', '建国门桥', '东直门桥']
+  return Array.from({ length: count }, (_, i) => {
+    const no = i + 1
+    // 少量演示态：前 2 台设置为任务中/返航中，其余待命
+    const status = no === 3 ? '任务中' : no === 5 ? '返航中' : '待命'
+    const battery = Math.max(35, 100 - (no - 1) * 2)
+    return {
+      id: `${prefix}-${pad2(no)}`,
+      type: typeText,
+      battery,
+      status,
+      startNode: pick(startPool, i),
+      position: {
+        lon: jitter(baseLon, 0.01, i),
+        lat: jitter(baseLat, 0.006, i),
+      },
+    }
+  })
+}
+
 const fleetList = reactive([
-  { id: 'D-01', type: '无人机', battery: 100, status: '待命', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
-  { id: 'D-02', type: '无人机', battery: 98, status: '待命', startNode: '北展桥', position: { lon: 116.3427, lat: 39.9387 } },
-  { id: 'D-03', type: '无人机', battery: 76, status: '任务中', startNode: '复兴门桥', position: { lon: 116.3566, lat: 39.9071 } },
-  { id: 'D-04', type: '无人机', battery: 100, status: '待命', startNode: '建国门桥', position: { lon: 116.4363, lat: 39.9089 } },
-  { id: 'D-05', type: '无人机', battery: 69, status: '返航中', startNode: '东直门桥', position: { lon: 116.4339, lat: 39.9408 } },
-  { id: 'A-01', type: '救护车', battery: 100, status: '待命', startNode: '西直门桥', position: { lon: 116.3557, lat: 39.9407 } },
-  { id: 'A-02', type: '救护车', battery: 85, status: '任务中', startNode: '复兴门桥', position: { lon: 116.3566, lat: 39.9071 } },
+  ...generateFleet('D', '无人机', 20, 116.36, 39.935),
+  ...generateFleet('A', '救护车', 20, 116.36, 39.925),
 ])
 
 // 自动计算统计数据
@@ -115,6 +148,8 @@ const {
   routeProfile,
   viewVehicle,
   unlockCamera,
+  isCameraFollowing,
+  toggleCameraFollow,
 } = useDrone(viewerRef, hospitalPressure)
 const { playClick, playRadar, playWarning, stopWarning } = useAudio()
 
@@ -124,13 +159,16 @@ const { isSettingLocation, currentRainZone, activateWeatherSetter, clearWeather 
 // 🌟 覆盖原有的 changeWeather 函数
 const changeWeather = (type) => {
   if (type === 'localRain') {
-    bottomPanelRef.value?.logRef?.addLog('warn', '👉 请在地图上点击位置，部署局部暴雨区...')
+    currentWeatherMode.value = 'rain'
+    addLog('WARN', '👉 请在地图上点击位置，部署局部暴雨区...')
     activateWeatherSetter()
   } else if (type === 'sunny') {
-    bottomPanelRef.value?.logRef?.addLog('info', '☀️ 气象武器已解除，天空恢复晴朗。')
+    currentWeatherMode.value = 'sunny'
+    addLog('INFO', '☀️ 气象武器已解除，天空恢复晴朗。')
     clearWeather()
     changeDroneWeather('sunny')
   } else {
+    currentWeatherMode.value = type
     changeDroneWeather(type)
   }
 }
@@ -139,19 +177,98 @@ const changeWeather = (type) => {
 const handleAIDispatch = async () => {
   playClick()
   if (!selectedResource.value || !selectedEndNode.value) return alert("请先选择调拨物资和目标医院！")
+  const aiStartNode = aiPreferTollStart.value && tollStations.value.length > 0
+    ? tollStations.value[0].name
+    : selectedStartNode.value
+  if (aiStartNode && aiStartNode === selectedEndNode.value) {
+    const msg = '⚠️ 起点医院与目标医院相同，禁止发车/发无人机，请重新选择目的医院。'
+    alert(msg)
+    addLog('WARN', msg)
+    return
+  }
 
-  // 1. 寻找第一架“待命”的无人机或车辆
-  const availableVehicle = fleetList.find(v => v.status === '待命')
-  if (!availableVehicle) {
-    bottomPanelRef.value?.logRef?.addLog('warn', `🚨 警告：当前全市无可用运力！请等待载具返航。`)
+  const target = selectedEndNode.value
+  const qty = dispatchQuantity.value
+  const resName = selectedResource.value.name
+
+  const idleDrones = fleetList.filter(v => v.status === '待命' && v.type === '无人机')
+  const idleAmbulances = fleetList.filter(v => v.status === '待命' && v.type === '救护车')
+
+  if (idleDrones.length === 0 && idleAmbulances.length === 0) {
+    const msg = '🚨 警告：当前全市无可用运力！请等待载具返航。'
+    addLog('WARN', msg)
     alert("当前无可用运力，请稍后再试！")
     return
   }
 
-  bottomPanelRef.value?.logRef?.addLog('info', `[AI 统管] 系统已自动分配 ${availableVehicle.id} 执行任务。`)
-  
-  // 执行具体的调度扣减逻辑
-  executeDispatch(availableVehicle, selectedStartNode.value)
+  // 运力约束下的智能兜底：如果某一类运力耗尽，先把强制类型设为剩余可用类型
+  let forcedType = null
+  let preAssignedVehicle = null
+  if (idleDrones.length === 0 && idleAmbulances.length > 0) {
+    forcedType = 'AMBULANCE'
+    preAssignedVehicle = idleAmbulances[0]
+    preAssignedVehicle.status = '任务中'
+    const msg = `⚖️ AI 约束调度：无人机已无可用，改由 ${preAssignedVehicle.id} 执行地面配送。`
+    addLog('WARN', msg)
+  } else if (idleAmbulances.length === 0 && idleDrones.length > 0) {
+    forcedType = 'DRONE'
+    preAssignedVehicle = idleDrones[0]
+    preAssignedVehicle.status = '任务中'
+    const msg = `⚖️ AI 约束调度：救护车已无可用，改由 ${preAssignedVehicle.id} 执行空中配送。`
+    addLog('WARN', msg)
+  }
+
+  try {
+    // 不再“先选第一台车”，而是让后端先做 AI 推荐，再回填车辆
+    const result = await droneDispatch(selectedResource.value, {
+      startNode: aiStartNode,
+      endNode: target,
+      forcedType: forcedType,
+      vehicleId: preAssignedVehicle?.id ?? null,
+      rainZone: currentRainZone.value,
+      qty: qty,
+    })
+
+    if (!result) {
+      if (preAssignedVehicle) preAssignedVehicle.status = '待命'
+      return
+    }
+
+    // 如果不是预分配场景，按 AI 推荐类型分配最合适的待命载具
+    let assignedVehicle = preAssignedVehicle
+    if (!assignedVehicle) {
+      const recommendedType = result.recommend ? '无人机' : '救护车'
+      assignedVehicle = fleetList.find(v => v.status === '待命' && v.type === recommendedType) || null
+
+      // 推荐类型无车可用时，回退到任意待命载具（并记录）
+      if (!assignedVehicle) {
+        assignedVehicle = fleetList.find(v => v.status === '待命') || null
+        if (assignedVehicle) {
+          const fallbackMsg = `⚠️ 推荐类型运力不足，已回退由 ${assignedVehicle.id} 执行任务。`
+          addLog('WARN', fallbackMsg)
+        }
+      }
+
+      if (assignedVehicle) assignedVehicle.status = '任务中'
+    }
+
+    if (result.analysis) {
+      decisionReportRef.value?.showReport(result)
+    }
+
+    if (hospitalNeeds.value[target] && hospitalNeeds.value[target][resName] !== undefined) {
+      hospitalNeeds.value[target][resName] = Math.max(0, hospitalNeeds.value[target][resName] - qty)
+    }
+
+    const vehicleCode = assignedVehicle?.id || 'AUTO'
+    const modeText = result.recommend ? '无人机' : '救护车'
+    const okMsg = `✅ [AI 智调] ${vehicleCode} 起点=${aiStartNode} -> ${target}，模式=${modeText}，${resName} -${qty}`
+    addLog('SUCCESS', okMsg)
+  } catch (e) {
+    if (preAssignedVehicle) preAssignedVehicle.status = '待命'
+    const errMsg = `❌ AI 调度失败: ${e.message}`
+    addLog('ERROR', errMsg)
+  }
 }
 
 // ================= 🌟 调度方案二：人工强制派单 =================
@@ -160,7 +277,7 @@ const handleManualDispatch = (vehicle) => {
   if (vehicle.status !== '待命') return alert("该载具正在执行任务或充电中，无法派单！")
   if (!selectedResource.value || !selectedEndNode.value) return alert("请在上方表单中配置好收货医院和物资！")
 
-  bottomPanelRef.value?.logRef?.addLog('info', `[人工微操] 指挥员强制派单给 ${vehicle.id}。`)
+  addLog('INFO', `[人工微操] 指挥员强制派单给 ${vehicle.id}。`)
   
   // 强制使用该载具的驻扎点作为起点
   executeDispatch(vehicle, vehicle.startNode)
@@ -173,9 +290,36 @@ const executeDispatch = async (vehicle, startNode) => {
   const qty = dispatchQuantity.value
   const forcedType = vehicle.type === '无人机' ? 'DRONE' : 'AMBULANCE'
 
+  if (startNode && target && startNode === target) {
+    const msg = '⚠️ 起点医院与目标医院相同，禁止发车/发无人机，请重新选择目的医院。'
+    alert(msg)
+    addLog('WARN', msg)
+    return
+  }
+
   try {
     // 锁定载具状态
     vehicle.status = '任务中'
+
+    // 前端即时熔断：无人机禁飞天气
+    if (forcedType === 'DRONE' && ['snow', 'fog'].includes(currentWeatherMode.value)) {
+      vehicle.status = '待命'
+      const msg = `❌ 前端熔断：当前天气 ${currentWeatherMode.value}，无人机禁飞，请改派救护车。`
+      alert(msg)
+      addLog('WARN', msg)
+      return
+    }
+
+    // 前端即时熔断：无人机载重上限（5kg）
+    const unitWeight = Number(selectedResource.value?.weight_kg || 0.5)
+    const totalWeight = unitWeight * Number(qty || 1)
+    if (forcedType === 'DRONE' && totalWeight > 5.0) {
+      vehicle.status = '待命'
+      const msg = `❌ 前端熔断：总重量 ${totalWeight.toFixed(2)}kg 超过无人机上限 5kg，请改派救护车。`
+      alert(msg)
+      addLog('WARN', msg)
+      return
+    }
 
     // 调用底层渲染
     const result = await droneDispatch(selectedResource.value, {
@@ -184,27 +328,29 @@ const executeDispatch = async (vehicle, startNode) => {
       forcedType: forcedType,
       vehicleId: vehicle.id,
       rainZone: currentRainZone.value,
+      qty: qty,
     })
 
     if (result && result.analysis) {
       decisionReportRef.value?.showReport(result)
     }
+    addLog('SUCCESS', `${vehicle.id} 已发往 ${target}，运载 ${qty} 单位 ${resName}。`)
 
     // 动态扣减医院缺口数据
     if (hospitalNeeds.value[target] && hospitalNeeds.value[target][resName] !== undefined) {
       hospitalNeeds.value[target][resName] = Math.max(0, hospitalNeeds.value[target][resName] - qty)
-      bottomPanelRef.value?.logRef?.addLog('info', `✅ [调度成功] ${vehicle.id} 已发车，${target} 缺口扣减: ${resName} -${qty}`)
+      addLog('SUCCESS', `✅ [调度成功] ${vehicle.id} 已发车，${target} 缺口扣减: ${resName} -${qty}`)
     }
   } catch (e) {
     vehicle.status = '待命' // 失败回滚
-    bottomPanelRef.value?.logRef?.addLog('warn', `❌ 调度失败: ${e.message}`)
+    addLog('ERROR', `❌ 调度失败: ${e.message}`)
   }
 }
 
 // 仅用于镜头跟踪
 const trackVehicle = (item) => {
   playClick()
-  bottomPanelRef.value?.logRef?.addLog('info', `视角锁定至载具: ${item.id}`)
+  addLog('INFO', `视角锁定至载具: ${item.id}`)
   viewVehicle(item.id)
 }
 
@@ -212,10 +358,26 @@ const fetchHospitals = async () => {
   try {
     const res = await axios.get('http://127.0.0.1:8000/api/hospitals')
     hospitals.value = res.data || []
+    if (!selectedStartNode.value && hospitals.value.length > 0) {
+      selectedStartNode.value = hospitals.value[0].name
+    } else if (!selectedStartNode.value && tollStations.value.length > 0) {
+      selectedStartNode.value = tollStations.value[0].name
+    }
     if (!selectedEndNode.value && hospitals.value.length > 0) {
       selectedEndNode.value = hospitals.value[0].name
     }
   } catch (e) { console.error('医院数据请求失败', e) }
+}
+
+const fetchTollStations = async () => {
+  try {
+    const res = await axios.get('http://127.0.0.1:8000/api/road_nodes')
+    const nodes = res.data || []
+    tollStations.value = nodes.filter(n => n.node_type === '收费站')
+  } catch (e) {
+    console.error('收费站节点请求失败', e)
+    tollStations.value = []
+  }
 }
 
 const fetchResources = async () => {
@@ -232,7 +394,15 @@ const fetchResources = async () => {
 const triggerAlarm = (message, type, batteryLevel = null) => {
   alarmMessage.value = message; alarmType.value = type; alarmBatteryLevel.value = batteryLevel;
   alarmTimestamp.value = new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  alarmVisible.value = true; playWarning(); bottomPanelRef.value?.logRef?.addLog('warn', `警报: ${message}`)
+  alarmVisible.value = true; playWarning(); addLog('WARN', `警报: ${message}`)
+}
+const addLog = (type, msg) => {
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const upperType = String(type || 'INFO').toUpperCase()
+  systemLogs.value.unshift({ time, type: upperType, msg })
+  if (systemLogs.value.length > 100) {
+    systemLogs.value = systemLogs.value.slice(0, 100)
+  }
 }
 const confirmAlarm = () => { stopWarning(); alarmVisible.value = false }
 const dismissAlarm = () => { stopWarning(); alarmVisible.value = false }
@@ -257,6 +427,7 @@ onMounted(async () => {
     }
   }
   fetchResources()
+  fetchTollStations()
   fetchHospitals()
   fetchHospitalNeeds()
   window.addEventListener('system-alarm', handleSystemAlarm)
@@ -303,16 +474,11 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 
     <ViewSwitch
       :traffic-active="isTrafficVisible"
+      :is-following="isCameraFollowing"
       @change="handleViewChange"
       @toggle-traffic="toggleTrafficLayer"
+      @toggle-follow="toggleCameraFollow"
     />
-    <button
-      v-if="activeDroneEntity"
-      class="unlock-view-btn"
-      @click="unlockCamera"
-    >
-      🌍 解除锁定 (恢复自由移动)
-    </button>
     <HUDOverlay :visible="viewMode === '3d' && showCamera" :telemetry="telemetry" :pathData="routeProfile" />
     <AlarmModal :visible="alarmVisible" :message="alarmMessage" :type="alarmType" :batteryLevel="alarmBatteryLevel" :timestamp="alarmTimestamp" @confirm="confirmAlarm" @dismiss="dismissAlarm" />
 
@@ -326,6 +492,13 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
               <select v-model="selectedStartNode" class="cyber-select">
                 <option v-for="node in startNodes" :key="node" :value="node">{{ node }}</option>
               </select>
+            </div>
+            <div class="form-row">
+              <span class="label">AI起点</span>
+              <label class="ai-start-toggle">
+                <input type="checkbox" v-model="aiPreferTollStart" />
+                <span>优先收费站发车（高速进城演示）</span>
+              </label>
             </div>
             
             <div class="form-row">
@@ -399,7 +572,7 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
       </div>
 
       <div class="bottom-panel">
-        <BottomPanel ref="bottomPanelRef" />
+        <BottomPanel ref="bottomPanelRef" :logs="systemLogs" />
       </div>
     </div>
     <DecisionReport ref="decisionReportRef" />
@@ -456,6 +629,14 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 .dispatch-form { display: flex; flex-direction: column; gap: 12px; }
 .form-row { display: flex; align-items: center; gap: 10px; }
 .form-row .label { color: rgba(255,255,255,0.7); font-size: 13px; width: 50px; }
+.ai-start-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255,255,255,0.85);
+  font-size: 12px;
+}
 .cyber-select, .cyber-input { flex: 1; background: rgba(0, 20, 40, 0.6); color: #00d2ff; border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 4px; padding: 6px 10px; font-size: 13px; outline: none; transition: border-color 0.3s; }
 .cyber-select:focus, .cyber-input:focus { border-color: #00d2ff; box-shadow: 0 0 8px rgba(0, 210, 255, 0.5); }
 .cyber-select option { background: #001220; color: #fff; }
@@ -494,38 +675,6 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 .manual-dispatch-btn { background: rgba(0, 210, 255, 0.15); border: 1px solid #00d2ff; color: #00d2ff; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; transition: all 0.2s; }
 .manual-dispatch-btn:hover:not(:disabled) { background: #00d2ff; color: #000; box-shadow: 0 0 10px rgba(0,210,255,0.5); }
 .manual-dispatch-btn:disabled { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: rgba(255,255,255,0.3); cursor: not-allowed; }
-
-/* ==== 解除锁定按钮样式 ==== */
-.unlock-view-btn {
-  position: absolute;
-  top: 130px;
-  right: 20px;
-  z-index: 2000;
-  background: rgba(255, 77, 79, 0.2);
-  border: 1px solid #ff4d4f;
-  color: #ff4d4f;
-  padding: 8px 16px;
-  border-radius: 4px;
-  font-size: 13px;
-  font-weight: bold;
-  cursor: pointer;
-  box-shadow: 0 0 10px rgba(255, 77, 79, 0.3);
-  transition: all 0.3s;
-  animation: pulse-red 2s infinite;
-}
-
-.unlock-view-btn:hover {
-  background: rgba(255, 77, 79, 0.6);
-  color: #fff;
-  box-shadow: 0 0 20px rgba(255, 77, 79, 0.6);
-  transform: scale(1.05);
-}
-
-@keyframes pulse-red {
-  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4); }
-  70% { box-shadow: 0 0 0 10px rgba(255, 77, 79, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
-}
 
 </style>
 <style>

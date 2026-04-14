@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 import json
 import math
 import os
+import random
 import sys
 import time
 import importlib.util
@@ -337,7 +338,7 @@ def get_amap_driving_route(start_lng, start_lat, end_lng, end_lat):
     )
 
     try:
-        response = requests.get(url, timeout=5).json()
+        response = requests.get(url, timeout=3).json()
         if response.get("status") == "1" and response.get("route", {}).get("paths"):
             path_points = []
             steps = response["route"]["paths"][0]["steps"]
@@ -351,9 +352,21 @@ def get_amap_driving_route(start_lng, start_lat, end_lng, end_lat):
                     path_points.append([wgs_lng, wgs_lat])
             return path_points  # 返回几百个密集坐标点
     except Exception as e:
-        print(f"❌ 高德API请求失败: {e}")
+        print(f"⚠️ 高德 API 超时或断网，启动离线兜底路网生成！({e})")
 
-    return []  # 失败兜底返回空
+    # 🌟 终极兜底：如果没网，在起终点之间生成一条带扰动的模拟公路！
+    fallback_path = []
+    steps = 15
+    for i in range(steps + 1):
+        t = i / steps
+        lng = start_lng + (end_lng - start_lng) * t
+        lat = start_lat + (end_lat - start_lat) * t
+        # 给中间的点加点锯齿，让它看起来像条路，而不是绝对直线
+        if 0 < i < steps:
+            lng += (random.random() - 0.5) * 0.005
+            lat += (random.random() - 0.5) * 0.005
+        fallback_path.append([lng, lat])
+    return fallback_path
 
 
 def _haversine_distance_m(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
@@ -375,8 +388,8 @@ def _compute_segment_lengths(path: List[List[float]]) -> List[float]:
     """返回每一段的长度数组，单位：米。len = len(path) - 1"""
     segs: List[float] = []
     for i in range(1, len(path)):
-        lng1, lat1 = path[i - 1]
-        lng2, lat2 = path[i]
+        lng1, lat1 = path[i - 1][0], path[i - 1][1]
+        lng2, lat2 = path[i][0], path[i][1]
         segs.append(_haversine_distance_m(lng1, lat1, lng2, lat2))
     return segs
 
@@ -489,8 +502,10 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
                 print(f"⚠️ 触发天气炸弹碰撞检测！距离雨区中心 {dist_m:.1f} 米")
 
     # 1. 计算评分 (🌟 把 rain_collision 传进去)
-    drone_result = calculate_medical_score(resource, "DRONE", rain_collision)
-    ambulance_result = calculate_medical_score(resource, "AMBULANCE", rain_collision)
+    # 同一次决策里共享同一个天气恶劣系数，避免“分数展示与推荐结果看起来矛盾”
+    shared_bad_weather = random.uniform(0, 100)
+    drone_result = calculate_medical_score(resource, "DRONE", rain_collision, request.qty, shared_bad_weather)
+    ambulance_result = calculate_medical_score(resource, "AMBULANCE", rain_collision, request.qty, shared_bad_weather)
 
     # 2. 顶层推荐方案（True = 推荐无人机）
     recommend_drone = drone_result["score"] > ambulance_result["score"]
@@ -501,33 +516,37 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
     assigned_altitude = 0.0
 
     try:
-        # 4. 🌟 实施“水陆双轨制”真实寻路！
-        if recommend_drone:
-            # 【无人机路线】：走直线/简易拓扑图，拉高高度
-            path_points = _compute_route_astar(real_start, real_end)
-            path = [[p["lng"], p["lat"]] for p in path_points]
-            assigned_altitude = _allocate_drone_altitude()  # 动态分配高空航道
-        else:
-            # 【救护车路线】：获取精确坐标，调用高德 API，贴地行驶
-            start_lng, start_lat = _get_coords_by_name(request.start_node, session)
-            end_lng, end_lat = _get_coords_by_name(request.end_node, session)
+        # 4. 实施“陆空双轨制”真实寻路！
+        start_lng, start_lat = _get_coords_by_name(request.start_node, session)
+        end_lng, end_lat = _get_coords_by_name(request.end_node, session)
 
+        if recommend_drone:
+            # ✈️【空中层：无人机 3D 避障算法】
+            assigned_altitude = _allocate_drone_altitude()  # 获取分配的空域层级
+            if start_lng and end_lng:
+                from algorithms import generate_3d_drone_path
+                # 生成带高度的 3D 轨迹点
+                path_points = generate_3d_drone_path(start_lng, start_lat, end_lng, end_lat, assigned_altitude)
+                # 🌟 关键：返回 [lng, lat, altitude] 格式的三维数组！
+                path = [[p["lng"], p["lat"], p["alt"]] for p in path_points]
+            else:
+                path = []
+        else:
+            # 🚑【地面层：救护车高德 API 贴地行驶】
+            assigned_altitude = 0.0
             if start_lng and end_lng:
                 print(f"🚑 触发高德真实路网计算: ({start_lng},{start_lat}) -> ({end_lng},{end_lat})")
+                # 🌟 高德返回的只有 [lng, lat] 二维数组
                 path = get_amap_driving_route(start_lng, start_lat, end_lng, end_lat)
             else:
-                # 兜底：如果找不到坐标，用原来的简易路网
-                path_points = _compute_route_astar(real_start, real_end)
-                path = [[p["lng"], p["lat"]] for p in path_points]
-
-            assigned_altitude = 0.0  # 救护车高度分配为0 (前端会垫高2米)
+                path = []
 
         # 在内存中登记一个新的在途载具，供 /api/fleet 实时查询
         if path:
             # 计算总距离（km），用于风险评估和机队 ETA
             for i in range(1, len(path)):
-                lng1, lat1 = path[i - 1]
-                lng2, lat2 = path[i]
+                lng1, lat1 = path[i - 1][0], path[i - 1][1]
+                lng2, lat2 = path[i][0], path[i][1]
                 total_distance_km += _haversine_distance_m(lng1, lat1, lng2, lat2) / 1000.0
 
             battery_start = _get_vehicle_battery_start(request.vehicle_id)
@@ -570,7 +589,7 @@ def plan_route(request: RouteRequest, session: Session = Depends(get_session)):
 
     task = DispatchTask(
         resource_id=request.resource_id,
-        qty=1,  # 当前前端未传数量，默认一次调度 1 单位
+        qty=max(1, int(request.qty or 1)),
         start_node=real_start,
         end_node=real_end,
         status="CREATED",

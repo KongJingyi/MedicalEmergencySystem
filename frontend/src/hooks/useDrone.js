@@ -15,6 +15,8 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // 3. 是否显示无人机第一视角窗口 (控制DroneCam组件的显隐)
   const showCamera = ref(false)
+  // 3.1 是否镜头跟随当前载具（trackedEntity）
+  const isCameraFollowing = ref(true)
 
   // 4. 天气系统实例（懒加载）
   let weatherSystem = null
@@ -35,6 +37,125 @@ export function useDrone(viewerRef, hospitalPressure) {
 
   // 6. Cesium 场景帧回调，用于每帧同步当前激活实体的遥测
   let telemetryHandler = null
+  // 6.1 自定义镜头跟随回调（让相机朝向载具正前方，并保持水平视线）
+  let followHandler = null
+
+  const getVehicleTypeFromEntity = (entity, time) => {
+    try {
+      const t = entity?.properties?.vehicleType?.getValue?.(time)
+      return t || null
+    } catch {
+      return null
+    }
+  }
+
+  const computeForwardHeadingFromPath = (entity, time) => {
+    if (!entity?.position?.getValue) return null
+
+    // 用未来一个很小的时间步来取“前进方向”
+    const dt = 0.35 // seconds
+    const tForward = Cesium.JulianDate.addSeconds(time, dt, new Cesium.JulianDate())
+    const tBack = Cesium.JulianDate.addSeconds(time, -dt, new Cesium.JulianDate())
+
+    const p0 = entity.position.getValue(time)
+    const p1 =
+      entity.position.getValue(tForward) ||
+      entity.position.getValue(Cesium.JulianDate.addSeconds(time, 1.0, new Cesium.JulianDate()))
+    const pm1 = entity.position.getValue(tBack)
+
+    // 优先使用 p0 -> p1，如果 p1 取不到就退化为 pm1 -> p0
+    let v = null
+    if (p0 && p1) {
+      v = Cesium.Cartesian3.subtract(p1, p0, new Cesium.Cartesian3())
+    } else if (pm1 && p0) {
+      v = Cesium.Cartesian3.subtract(p0, pm1, new Cesium.Cartesian3())
+    } else {
+      return null
+    }
+
+    // 投影到 ENU 平面，取 east/north 分量，计算 heading
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(p0 || pm1)
+    const east = Cesium.Matrix4.getColumn(enu, 0, new Cesium.Cartesian3())
+    const north = Cesium.Matrix4.getColumn(enu, 1, new Cesium.Cartesian3())
+
+    const eastComp = Cesium.Cartesian3.dot(v, east)
+    const northComp = Cesium.Cartesian3.dot(v, north)
+
+    if (!Number.isFinite(eastComp) || !Number.isFinite(northComp)) return null
+
+    // heading=0 指向 north；atan2(east,north) 与 Cesium heading 约定一致
+    return Math.atan2(eastComp, northComp)
+  }
+
+  const updateFollowCamera = () => {
+    const viewer = viewerRef.value
+    if (!viewer || !isCameraFollowing.value) return
+    const entity = activeDroneEntity.value
+    if (!entity?.position || !entity?.orientation) return
+
+    const time = viewer.clock?.currentTime
+    if (!time) return
+
+    const position = entity.position.getValue(time)
+    if (!position) return
+
+    // ✅ 镜头始终朝向“沿路径前进方向”，而不是模型自身朝向
+    const heading = computeForwardHeadingFromPath(entity, time)
+    if (heading == null) return
+
+    const vehicleType = getVehicleTypeFromEntity(entity, time)
+    const behind = vehicleType === 'AMBULANCE' ? 35 : 55
+    const up = vehicleType === 'AMBULANCE' ? 10 : 18
+
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position)
+    const east = Cesium.Matrix4.getColumn(enu, 0, new Cesium.Cartesian3())
+    const north = Cesium.Matrix4.getColumn(enu, 1, new Cesium.Cartesian3())
+    const upVec = Cesium.Matrix4.getColumn(enu, 2, new Cesium.Cartesian3())
+
+    const sinH = Math.sin(heading)
+    const cosH = Math.cos(heading)
+
+    // 前进方向（水平面）：east*sin + north*cos
+    const forward = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.multiplyByScalar(east, sinH, new Cesium.Cartesian3()),
+      Cesium.Cartesian3.multiplyByScalar(north, cosH, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    )
+
+    // 相机在载具后方一点，并抬高一些
+    const behindOffset = Cesium.Cartesian3.multiplyByScalar(forward, -behind, new Cesium.Cartesian3())
+    const upOffset = Cesium.Cartesian3.multiplyByScalar(upVec, up, new Cesium.Cartesian3())
+    const destination = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.add(position, behindOffset, new Cesium.Cartesian3()),
+      upOffset,
+      new Cesium.Cartesian3()
+    )
+
+    viewer.camera.setView({
+      destination,
+      orientation: {
+        heading,
+        pitch: 0.0, // 视线平行地面
+        roll: 0.0,
+      },
+    })
+  }
+
+  const detachFollowCamera = () => {
+    const viewer = viewerRef.value
+    if (viewer?.scene && followHandler) {
+      viewer.scene.preRender.removeEventListener(followHandler)
+      followHandler = null
+    }
+  }
+
+  const attachFollowCamera = () => {
+    const viewer = viewerRef.value
+    if (!viewer?.scene || followHandler) return
+    viewer.trackedEntity = undefined // 防止和 Cesium 默认跟随打架
+    followHandler = () => updateFollowCamera()
+    viewer.scene.preRender.addEventListener(followHandler)
+  }
 
   // 7. 全局报警分发（通过 window 自定义事件让 App 统一处理）
   const triggerSystemAlarm = (msg, type, battery) => {
@@ -105,6 +226,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     let vehicleId = null
     let forcedType = null
     let rainZone = null // 🌟 1. 新增接收天气参数
+    let qty = 1
 
     if (
       startNodeOrOptions &&
@@ -117,6 +239,7 @@ export function useDrone(viewerRef, hospitalPressure) {
       vehicleId = startNodeOrOptions.vehicleId ?? null
       forcedType = startNodeOrOptions.forcedType ?? null
       rainZone = startNodeOrOptions.rainZone ?? null // 🌟 2. 提取天气参数
+      qty = Number(startNodeOrOptions.qty || 1)
     } else {
       // 写法 2：两个字符串
       startNode = startNodeOrOptions ?? startNode
@@ -134,6 +257,7 @@ export function useDrone(viewerRef, hospitalPressure) {
         vehicle_id: vehicleId,
         forced_type: forcedType,
         rain_zone: rainZone, // 传给后端，格式为 { lng: 116.x, lat: 39.x } 或 null
+        qty: qty || 1, // 增加数量传参
       }
 
       // 调用后端路径规划接口，获取配送方式推荐（无人机/车辆）
@@ -142,12 +266,6 @@ export function useDrone(viewerRef, hospitalPressure) {
       const result = res.data
       const isDrone = result.recommend
       const rawPath = result.path
-      
-      // 🌟 获取后端分配的专属高度，如果没有则兜底 200
-      const assignedAltitude = result.altitude || 200
-      
-      // 🌟 统一设定一个“安全悬停高度”，避开北京的建筑群和地形起伏
-      const safeHoverAltitude = 800
 
       if (viewerRef.value && rawPath && rawPath.length > 0) {
         const wgs84Path = rawPath
@@ -157,80 +275,99 @@ export function useDrone(viewerRef, hospitalPressure) {
         }
 
         const profileData = []
-        const pathWithAltitude = [] // 🌟 新建一个带高度的三维路径数组
-        const flat = [] // 给画线用的数组
+        const pathWithAltitude = []
+        const flat = []
         let accumulatedDistance = 0
 
-        // 🌟 兜底巡航高度（后端现在会传 300~500）
-        const assignedAltitude = result.altitude || 400
-        // 🌟 地面安全垫高：只需垫高 20 米，防止飞机出生在马路地底即可
-        const groundClearance = 20
-
+        // 🌟 核心解析：区分接收 2D(救护车) 和 3D(无人机) 数据
         for (let i = 0; i < wgs84Path.length; i++) {
-          const [lng, lat] = wgs84Path[i]
+          const point = wgs84Path[i]
+          const lng = point[0]
+          const lat = point[1]
 
-          if (isDrone) {
-            if (i === 0) {
-              // 🚀 起点：实现垂直起飞！
-              // 第 1 个点：地表起飞点
-              pathWithAltitude.push([lng, lat, groundClearance])
-              flat.push(lng, lat, groundClearance)
-              // 第 2 个点：原地垂直爬升到巡航高度
-              pathWithAltitude.push([lng, lat, assignedAltitude])
-              flat.push(lng, lat, assignedAltitude)
-            } else if (i === wgs84Path.length - 1) {
-              // 🛬 终点：实现垂直降落！
-              // 第 1 个点：保持巡航高度到达目标上空
-              pathWithAltitude.push([lng, lat, assignedAltitude])
-              flat.push(lng, lat, assignedAltitude)
-              // 第 2 个点：原地垂直降落到地表
-              pathWithAltitude.push([lng, lat, groundClearance])
-              flat.push(lng, lat, groundClearance)
-            } else {
-              // ✈️ 中间过程：保持高空水平巡航
-              pathWithAltitude.push([lng, lat, assignedAltitude])
-              flat.push(lng, lat, assignedAltitude)
-            }
+          // 如果后端传了第三个参数(高度)就用后端的，否则兜底 2 米(救护车)
+          let alt = point.length > 2 ? point[2] : 2
+          if (!isDrone) {
+            alt = 2 // 救护车强制贴地
           } else {
-            // 🚑 救护车：依然贴地行驶
-            const currentAlt = 2
-            pathWithAltitude.push([lng, lat, currentAlt])
-            flat.push(lng, lat, currentAlt)
+            // ✅ 无人机高度钳制：保持在楼房上方一点点，避免飞太高
+            alt = Math.max(40, Math.min(Number(alt || 0), 90))
           }
 
-          // 距离累加逻辑保持不变
+          pathWithAltitude.push([lng, lat, alt])
+          flat.push(lng, lat, alt)
+
+          // 距离累加
           if (i > 0) {
-            const [prevLng, prevLat] = wgs84Path[i - 1]
-            const prevPos = Cesium.Cartesian3.fromDegrees(prevLng, prevLat)
+            const prevPos = Cesium.Cartesian3.fromDegrees(wgs84Path[i - 1][0], wgs84Path[i - 1][1])
             const currPos = Cesium.Cartesian3.fromDegrees(lng, lat)
-            const dist = Cesium.Cartesian3.distance(prevPos, currPos)
-            accumulatedDistance += dist
+            accumulatedDistance += Cesium.Cartesian3.distance(prevPos, currPos)
           }
 
           profileData.push({
             distance: accumulatedDistance / 1000,
-            altitude: isDrone ? assignedAltitude : 2,
+            altitude: alt,
           })
         }
 
         routeProfile.value = profileData
 
-        const viewer = viewerRef.value
-        
-        // 绘制三维空中立体光带航线
-        viewer.entities.add({
+        // 🌟 视觉盛宴：地空独立渲染样式！
+        viewerRef.value.entities.add({
           polyline: {
+            // Cesium 支持直接接收经纬度+高度的 flat 数组
             positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat),
-            width: 3,
-            material: new Cesium.PolylineGlowMaterialProperty({
-              glowPower: 0.2,
-              color: nextPathColor(), // 使用了你写的轮询变色！
-            }),
-            clampToGround: false, // 必须 false
+            width: isDrone ? 3 : 8, // 无人机细光束，救护车宽车道
+
+            // 材质区分
+            material: isDrone
+              // 无人机：赛博朋克虚线脉冲 (表示空中走廊)
+              ? new Cesium.PolylineDashMaterialProperty({
+                  color: Cesium.Color.CYAN,
+                  dashLength: 20
+                })
+              // 救护车：高亮地面霓虹实线 (表示地面拥堵/特权通道)
+              : new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.15,
+                  color: Cesium.Color.ORANGE
+                }),
+
+            // 🌟 灵魂属性：无人机悬空，救护车完美贴合地表起伏
+            clampToGround: !isDrone,
           },
         })
 
-        // 启动！
+        // 🌟 避障段高亮：当无人机出现明显抬升时，叠加一条洋红色高亮线用于解释“AI 正在绕障”
+        if (isDrone && pathWithAltitude.length >= 2) {
+          const altitudes = pathWithAltitude.map((p) => p[2] ?? 0)
+          const minAlt = Math.min(...altitudes)
+          const obstacleFlat = []
+
+          pathWithAltitude.forEach((point) => {
+            const [lng, lat, alt] = point
+            // 抬升超过基础高度 60m 视为“避障段”
+            if (alt > minAlt + 60) {
+              obstacleFlat.push(lng, lat, alt)
+            }
+          })
+
+          // 至少两个点才能成线
+          if (obstacleFlat.length >= 6) {
+            viewerRef.value.entities.add({
+              polyline: {
+                positions: Cesium.Cartesian3.fromDegreesArrayHeights(obstacleFlat),
+                width: 6,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.35,
+                  color: Cesium.Color.MAGENTA.withAlpha(0.95),
+                }),
+                clampToGround: false,
+              },
+            })
+          }
+        }
+
+        // 启动模型运动
         createAndFly(isDrone, resource.id, pathWithAltitude)
         return result
       } else {
@@ -291,18 +428,9 @@ export function useDrone(viewerRef, hospitalPressure) {
       })
     }
 
-    viewer.trackedEntity = undefined
-    setTimeout(() => {
-      viewer.trackedEntity = newVehicle.entity
-      viewer.flyTo(newVehicle.entity, {
-        duration: 1.0,
-        offset: new Cesium.HeadingPitchRange(
-          0,
-          Cesium.Math.toRadians(-50),
-          isDrone ? 600 : 300
-        ),
-      })
-    }, 150)
+    if (isCameraFollowing.value) {
+      attachFollowCamera()
+    }
   }
 
   // 根据载具ID，查找对应配送载体并锁定视角
@@ -323,8 +451,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     if (targetVehicle) {
       activeDroneEntity.value = markRaw(targetVehicle.entity);
       showCamera.value = true;
-      // 🌟 核心：强行将 Cesium 相机锁定到这个实体上
-      viewer.trackedEntity = targetVehicle.entity;
+      if (isCameraFollowing.value) attachFollowCamera()
     } else {
       alert("未找到该载具，可能尚未起飞或已结束任务！");
     }
@@ -334,10 +461,26 @@ export function useDrone(viewerRef, hospitalPressure) {
   const unlockCamera = () => {
     const viewer = viewerRef.value
     if (viewer) {
-      viewer.trackedEntity = undefined // 这一句是恢复自由平移的灵魂！
-      activeDroneEntity.value = null   // 清空当前激活实体
-      showCamera.value = false         // 关闭第一视角 HUD
+      viewer.trackedEntity = undefined // 恢复自由平移
+      isCameraFollowing.value = false
+      detachFollowCamera()
     }
+  }
+
+  const setCameraFollow = (enabled) => {
+    isCameraFollowing.value = Boolean(enabled)
+    const viewer = viewerRef.value
+    if (!viewer) return
+    if (!isCameraFollowing.value) {
+      viewer.trackedEntity = undefined
+      detachFollowCamera()
+      return
+    }
+    attachFollowCamera()
+  }
+
+  const toggleCameraFollow = () => {
+    setCameraFollow(!isCameraFollowing.value)
   }
 
   // 关闭无人机第一视角窗口
@@ -477,6 +620,7 @@ export function useDrone(viewerRef, hospitalPressure) {
       if (entity) {
         attachTelemetry()
         startBatteryMonitor()
+        if (isCameraFollowing.value) attachFollowCamera()
       } else {
         detachTelemetry()
       }
@@ -504,9 +648,12 @@ export function useDrone(viewerRef, hospitalPressure) {
     droneFleet,
     activeDroneEntity,
     showCamera,
+    isCameraFollowing,
     dispatch,
     viewVehicle,
     unlockCamera,
+    setCameraFollow,
+    toggleCameraFollow,
     closeCamera,
     clearAll,
     changeWeather,

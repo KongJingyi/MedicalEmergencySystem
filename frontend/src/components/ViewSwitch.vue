@@ -14,11 +14,11 @@
       
       <button 
         class="switch-btn"
-        :class="{ active: viewMode === '3d' }"
-        @click="switchMode('3d')"
+        :class="{ active: isFollowing }"
+        @click="toggleFollow"
       >
-        <span class="btn-icon">🚁</span>
-        <span class="btn-text">驾驶舱</span>
+        <span class="btn-icon">🎯</span>
+        <span class="btn-text">{{ isFollowing ? '取消镜头跟随' : '镜头跟随' }}</span>
       </button>
 
       <div class="switch-divider"></div>
@@ -35,7 +35,9 @@
     
     <div class="switch-status">
       <span class="status-dot" :data-mode="viewMode"></span>
-      <span class="status-text">{{ viewMode === '2d' ? '全局视图' : '驾驶舱视图' }}</span>
+      <span class="status-text">
+        {{ viewMode === '2d' ? '全局视图' : (isFollowing ? '镜头跟随中' : '自由视角') }}
+      </span>
     </div>
   </div>
 </template>
@@ -49,9 +51,13 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  isFollowing: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['change', 'toggle-traffic'])
+const emit = defineEmits(['change', 'toggle-traffic', 'toggle-follow'])
 
 const { playClick } = useAudio()
 
@@ -61,6 +67,14 @@ const switchMode = (mode) => {
   playClick()
   viewMode.value = mode
   emit('change', mode)
+}
+
+const toggleFollow = () => {
+  playClick()
+  emit('toggle-follow')
+  // 让 UI 状态与跟随模式保持一致
+  viewMode.value = props.isFollowing ? '2d' : '3d'
+  emit('change', viewMode.value)
 }
 
 const toggleTraffic = () => {

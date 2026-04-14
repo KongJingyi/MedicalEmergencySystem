@@ -112,24 +112,66 @@ const syncCamera = () => {
   const orientation = rawVehicle.orientation.getValue(time)
 
   if (position && orientation) {
-    const transform = Cesium.Transforms.headingPitchRollToFixedFrame(
-        position,
-        Cesium.HeadingPitchRoll.fromQuaternion(orientation)
+    const hpr = Cesium.HeadingPitchRoll.fromQuaternion(orientation)
+    // ✅ 小窗也改为沿路径前进方向（速度方向）看向正前方
+    const computeForwardHeadingFromPath = () => {
+      if (!rawVehicle?.position?.getValue) return null
+      const dt = 0.35
+      const tForward = Cesium.JulianDate.addSeconds(time, dt, new Cesium.JulianDate())
+      const tBack = Cesium.JulianDate.addSeconds(time, -dt, new Cesium.JulianDate())
+
+      const p0 = rawVehicle.position.getValue(time)
+      const p1 =
+        rawVehicle.position.getValue(tForward) ||
+        rawVehicle.position.getValue(Cesium.JulianDate.addSeconds(time, 1.0, new Cesium.JulianDate()))
+      const pm1 = rawVehicle.position.getValue(tBack)
+
+      let v = null
+      if (p0 && p1) v = Cesium.Cartesian3.subtract(p1, p0, new Cesium.Cartesian3())
+      else if (pm1 && p0) v = Cesium.Cartesian3.subtract(p0, pm1, new Cesium.Cartesian3())
+      else return null
+
+      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(p0 || pm1)
+      const east = Cesium.Matrix4.getColumn(enu, 0, new Cesium.Cartesian3())
+      const north = Cesium.Matrix4.getColumn(enu, 1, new Cesium.Cartesian3())
+      const eastComp = Cesium.Cartesian3.dot(v, east)
+      const northComp = Cesium.Cartesian3.dot(v, north)
+      if (!Number.isFinite(eastComp) || !Number.isFinite(northComp)) return null
+      return Math.atan2(eastComp, northComp)
+    }
+
+    const headingAngle = computeForwardHeadingFromPath() ?? hpr.heading
+    const vehicleType = rawVehicle?.properties?.vehicleType?.getValue?.(time) || null
+    const behind = vehicleType === 'AMBULANCE' ? 25 : 40
+    const up = vehicleType === 'AMBULANCE' ? 6 : 12
+
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position)
+    const east = Cesium.Matrix4.getColumn(enu, 0, new Cesium.Cartesian3())
+    const north = Cesium.Matrix4.getColumn(enu, 1, new Cesium.Cartesian3())
+    const upVec = Cesium.Matrix4.getColumn(enu, 2, new Cesium.Cartesian3())
+
+    const sinH = Math.sin(headingAngle)
+    const cosH = Math.cos(headingAngle)
+    const forward = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.multiplyByScalar(east, sinH, new Cesium.Cartesian3()),
+      Cesium.Cartesian3.multiplyByScalar(north, cosH, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
     )
 
-    const hpr = Cesium.HeadingPitchRoll.fromQuaternion(orientation)
-    const headingAngle = hpr.heading
-    const pitchAngle = hpr.pitch
-    const rollAngle = hpr.roll
-    
-    const lookDownAngle = Cesium.Math.toRadians(15.0) 
+    const behindOffset = Cesium.Cartesian3.multiplyByScalar(forward, -behind, new Cesium.Cartesian3())
+    const upOffset = Cesium.Cartesian3.multiplyByScalar(upVec, up, new Cesium.Cartesian3())
+    const destination = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.add(position, behindOffset, new Cesium.Cartesian3()),
+      upOffset,
+      new Cesium.Cartesian3()
+    )
 
     miniViewer.camera.setView({
-      destination: position,
+      destination,
       orientation: {
         heading: headingAngle,
-        pitch: pitchAngle - lookDownAngle,
-        roll: rollAngle
+        pitch: 0.0, // 平行地面看向正前方
+        roll: 0.0,
       }
     })
     
@@ -138,8 +180,8 @@ const syncCamera = () => {
     
     speed.value = Math.random() * 30 + 45
     distance.value = Math.random() * 2 + 0.5
-    pitch.value = Cesium.Math.toDegrees(pitchAngle)
-    roll.value = Cesium.Math.toDegrees(rollAngle)
+    pitch.value = 0
+    roll.value = 0
     heading.value = Cesium.Math.toDegrees(headingAngle)
   }
 }

@@ -57,10 +57,28 @@ class TrafficGraph:
         weather: str = "sunny",
         traffic_level: str = "green",
     ) -> float:
+        """计算两点之间的动态权重"""
         base_dist = self._get_base_distance(u, v)
+        weight = base_dist
+
+        # 获取节点属性
+        node_u = self.nodes[u]
+        node_v = self.nodes[v]
+
+        # 🌟 核心：高速公路畅通无阻，权重降低
+        if node_u.get("node_type") == "高速" or node_v.get("node_type") == "高速":
+            weight *= 0.5  # 模拟 120km/h 的高时效
+
+        # 🌟 核心：收费站进城拦截！如果遇到城内拥堵，收费站就像个大闸
+        if node_v.get("node_type") == "收费站" and traffic_level in ["yellow", "red"]:
+            weight += 10.0  # 强行增加 10 公里的拥堵阻力代价！
+
+        # 保留天气/交通整体惩罚
         weather_factor = self.WEATHER_FACTORS.get(weather, 1.0)
         traffic_factor = self.TRAFFIC_FACTORS.get(traffic_level, 1.0)
-        return base_dist * weather_factor * traffic_factor
+        weight *= weather_factor
+        weight *= traffic_factor
+        return max(weight, 0.001)
 
     def get_neighbors(
         self,

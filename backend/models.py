@@ -225,3 +225,4 @@ class RouteRequest(SQLModel):
     forced_type: Optional[str] = None  # 可选：强制指定 DRONE / AMBULANCE（用于演示人工派单）
     # 🌟 新增：接收前端传来的天气炸弹坐标
     rain_zone: Optional[Dict[str, float]] = None
+    qty: int = Field(default=1)  # 🌟 新增：配送数量

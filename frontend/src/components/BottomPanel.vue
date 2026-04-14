@@ -18,7 +18,7 @@
       </div>
 
       <div v-show="activeTab === 'logs'" class="logs-panel">
-        <SystemLog ref="logRef" />
+        <EventTimeline :logs="logs" />
       </div>
     </div>
   </PanelBox>
@@ -28,14 +28,20 @@
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import * as echarts from 'echarts'
 import PanelBox from './ui/PanelBox.vue'
-import SystemLog from './ui/SystemLog.vue'
+import EventTimeline from './ui/EventTimeline.vue'
 import { useAudio } from '../hooks/useAudio'
+
+defineProps({
+  logs: {
+    type: Array,
+    default: () => [],
+  },
+})
 
 const { playClick } = useAudio()
 
 const activeTab = ref('coldchain')
 const chartTempRef = ref(null)
-const logRef = ref(null)
 
 let tempChart = null
 let updateInterval = null
@@ -44,7 +50,7 @@ const tempData = ref([-70, -72, -68, -73, -69])
 
 const tabs = [
   { id: 'coldchain', name: '冷链监控' },
-  { id: 'logs', name: '系统日志' }
+  { id: 'logs', name: '指挥中心事件流' }
 ]
 
 const initTempChart = () => {
@@ -119,7 +125,6 @@ onBeforeUnmount(() => {
   if (updateInterval) clearInterval(updateInterval)
 })
 
-defineExpose({ logRef })
 </script>
 
 <style scoped>

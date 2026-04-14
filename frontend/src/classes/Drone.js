@@ -45,9 +45,21 @@ export class Drone {
       this.typeConfig.fixHeading
     )
 
+    const displayId = String(this.id || '')
+      .replace(/^drone-/i, 'UAV-')
+      .replace(/^car-/i, 'AMB-')
+
+    const labelText =
+      type === 'AMBULANCE'
+        ? `🚑 ${displayId}`
+        : `🛸 ${displayId}`
+
     // 4. 创建实体
     this.entity = this.viewer.entities.add({
       id: this.id,
+      properties: {
+        vehicleType: type,
+      },
       availability: new Cesium.TimeIntervalCollection([
         new Cesium.TimeInterval({ start, stop }),
       ]),
@@ -58,6 +70,21 @@ export class Drone {
         minimumPixelSize: this.typeConfig.minimumPixelSize,
         scale: this.typeConfig.scale,
         runAnimations: true,
+      },
+      label: {
+        text: labelText,
+        font: 'bold 16px sans-serif',
+        fillColor: Cesium.Color.RED,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 4,
+        showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.55),
+        pixelOffset: new Cesium.Cartesian2(0, -28),
+        eyeOffset: new Cesium.Cartesian3(0, 0, -30),
+        horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        scaleByDistance: new Cesium.NearFarScalar(500, 1.4, 20000, 0.6),
       },
       path: {
         resolution: 1,
