@@ -28,9 +28,12 @@ const bottomPanelRef = ref(null)
 const decisionReportRef = ref(null)
 const viewMode = ref('2d')
 const showPanels = ref(true)
+const bottomPanelExpanded = ref(false)
+const shortageOpen = ref(false)
+const dispatchOpen = ref(false)
+const fleetOpen = ref(false)
 const showHospitals = ref(false)
 const showRoadNodes = ref(false)
-const aiPreferTollStart = ref(true)
 
 const alarmVisible = ref(false)
 const alarmMessage = ref('')
@@ -46,6 +49,14 @@ const selectedStartNode = ref('') // 默认发货仓（加载医院后自动赋�
 const selectedEndNode = ref('') // 目标医院
 const selectedResource = ref(null) // 调拨物资
 const dispatchQuantity = ref(10) // 派发数量
+const roadCongestionLevel = ref('mid') // low / mid / high
+const shortageHospital = ref('')
+const shortageResourceId = ref(null)
+const shortageQty = ref(20)
+const shortageResult = ref(null)
+const shortageHistory = ref([])
+const showShortagePrompt = ref(false)
+const showRecommendationDialog = ref(false)
 
 const hospitalNeeds = ref({})
 const tollStations = ref([])
@@ -53,6 +64,17 @@ const tollStations = ref([])
 const currentNeeds = computed(() => {
   if (!selectedEndNode.value || !hospitalNeeds.value) return {}
   return hospitalNeeds.value[selectedEndNode.value] || {}
+})
+
+
+const selectedShortageResource = computed(() => {
+  return (resources.value || []).find(r => String(r.id) === String(shortageResourceId.value)) || null
+})
+
+const hospitalMapByName = computed(() => {
+  const m = new Map()
+  ;(hospitals.value || []).forEach(h => m.set(h.name, h))
+  return m
 })
 
 // 🌟 拉取后端物资缺口数据 (如果你后端还没写好接口，就先用这个完美匹配 JSON 的备用数据)
@@ -106,8 +128,8 @@ const generateFleet = (prefix, typeText, count, baseLon, baseLat) => {
   const startPool = ['西直门桥', '北展桥', '复兴门桥', '建国门桥', '东直门桥']
   return Array.from({ length: count }, (_, i) => {
     const no = i + 1
-    // 少量演示态：前 2 台设置为任务中/返航中，其余待命
-    const status = no === 3 ? '任务中' : no === 5 ? '返航中' : '待命'
+    // 进入页面时统一空闲，便于演示时从“0任务”开始派单
+    const status = '待命'
     const battery = Math.max(35, 100 - (no - 1) * 2)
     return {
       id: `${prefix}-${pad2(no)}`,
@@ -177,9 +199,7 @@ const changeWeather = (type) => {
 const handleAIDispatch = async () => {
   playClick()
   if (!selectedResource.value || !selectedEndNode.value) return alert("请先选择调拨物资和目标医院！")
-  const aiStartNode = aiPreferTollStart.value && tollStations.value.length > 0
-    ? tollStations.value[0].name
-    : selectedStartNode.value
+  const aiStartNode = selectedStartNode.value
   if (aiStartNode && aiStartNode === selectedEndNode.value) {
     const msg = '⚠️ 起点医院与目标医院相同，禁止发车/发无人机，请重新选择目的医院。'
     alert(msg)
@@ -216,6 +236,19 @@ const handleAIDispatch = async () => {
     preAssignedVehicle.status = '任务中'
     const msg = `⚖️ AI 约束调度：救护车已无可用，改由 ${preAssignedVehicle.id} 执行空中配送。`
     addLog('WARN', msg)
+  }
+
+  // 🌟 前端演示策略：人为调拥堵可影响推荐方向（仅在运力约束未触发时生效）
+  if (!forcedType) {
+    if (roadCongestionLevel.value === 'high') {
+      forcedType = 'DRONE'
+      addLog('INFO', '🚦 拥堵策略：道路高拥堵，系统偏向推荐无人机。')
+    } else if (roadCongestionLevel.value === 'low') {
+      forcedType = 'AMBULANCE'
+      addLog('INFO', '🚦 拥堵策略：道路低拥堵，系统偏向推荐救护车。')
+    } else {
+      addLog('INFO', '🚦 拥堵策略：中等拥堵，保持综合评估。')
+    }
   }
 
   try {
@@ -404,10 +437,161 @@ const addLog = (type, msg) => {
     systemLogs.value = systemLogs.value.slice(0, 100)
   }
 }
+
+const haversineKm = (lng1, lat1, lng2, lat2) => {
+  const toRad = (d) => (d * Math.PI) / 180
+  const R = 6371
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+const estimateHospitalStock = (hospitalName, resourceId) => {
+  // 前端演示用：稳定伪随机库存（同样输入始终同结果）
+  const str = `${hospitalName}-${resourceId}`
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) % 100000
+  }
+  return 15 + (hash % 120) // 15~134
+}
+
+const publishShortageRequest = () => {
+  const targetHospital = shortageHospital.value
+  const resource = selectedShortageResource.value
+  const qty = Number(shortageQty.value || 0)
+
+  if (!targetHospital || !resource || qty <= 0) {
+    alert('请先选择急缺医院、物资和数量。')
+    return
+  }
+
+  const target = hospitalMapByName.value.get(targetHospital)
+  if (!target) {
+    alert('目标医院坐标不存在，无法生成推荐。')
+    return
+  }
+
+  const candidates = (hospitals.value || [])
+    .filter(h => h.name !== targetHospital)
+    .map((h) => {
+      const dist = haversineKm(target.lng, target.lat, h.lng, h.lat)
+      const stock = estimateHospitalStock(h.name, resource.id)
+      // 综合评分：库存权重高，距离越近分越高
+      const score = stock * 0.65 + (120 / (dist + 1)) * 0.35
+      return {
+        hospital: h.name,
+        distanceKm: Number(dist.toFixed(1)),
+        stock,
+        score: Number(score.toFixed(1)),
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+
+  shortageResult.value = {
+    targetHospital,
+    resourceName: resource.name,
+    qty,
+    recommendations: candidates,
+    time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+  }
+
+  // 关键：把“实际发布的急缺信息”写入图表数据源（不再依赖演示假数据）
+  if (!hospitalNeeds.value[targetHospital]) {
+    hospitalNeeds.value[targetHospital] = {}
+  }
+  hospitalNeeds.value[targetHospital][resource.name] = qty
+  // 切换右侧图表到当前发布医院，确保发布后立刻可见
+  selectedEndNode.value = targetHospital
+
+  const recordId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  shortageHistory.value.unshift({
+    id: recordId,
+    hospital: targetHospital,
+    resourceName: resource.name,
+    qty,
+    time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    status: 'pending',
+    recommendations: candidates,
+  })
+  if (shortageHistory.value.length > 12) {
+    shortageHistory.value = shortageHistory.value.slice(0, 12)
+  }
+  showShortagePrompt.value = true
+  showRecommendationDialog.value = false
+
+  addLog(
+    'WARN',
+    `📣 急缺求助已发布：${targetHospital} 急缺 ${resource.name} x${qty}，系统已生成跨院支援推荐。`
+  )
+}
+
+const applyRecommendation = (rec) => {
+  const res = selectedShortageResource.value
+  if (!res || !shortageResult.value) return
+  selectedStartNode.value = rec.hospital
+  selectedEndNode.value = shortageResult.value.targetHospital
+  selectedResource.value = res
+  dispatchQuantity.value = shortageResult.value.qty
+  dispatchOpen.value = true
+  showRecommendationDialog.value = false
+  showShortagePrompt.value = false
+
+  // 将当前对应急缺记录标记为“已调度”
+  const targetName = shortageResult.value.targetHospital
+  const targetRes = shortageResult.value.resourceName
+  const targetQty = shortageResult.value.qty
+  const idx = shortageHistory.value.findIndex(
+    (x) =>
+      x.hospital === targetName &&
+      x.resourceName === targetRes &&
+      Number(x.qty) === Number(targetQty) &&
+      x.status !== 'dispatched'
+  )
+  if (idx >= 0) {
+    shortageHistory.value[idx] = {
+      ...shortageHistory.value[idx],
+      status: 'dispatched',
+      dispatchTime: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    }
+  }
+
+  addLog('SUCCESS', `✅ 已应用推荐：由 ${rec.hospital} 向 ${shortageResult.value.targetHospital} 发起调拨。`)
+}
+
+const goDispatchFromPrompt = () => {
+  showShortagePrompt.value = false
+  showRecommendationDialog.value = true
+}
+
+const openDispatchForRecord = (recordId) => {
+  const record = shortageHistory.value.find((x) => x.id === recordId)
+  if (!record) return
+  const res = (resources.value || []).find((r) => r.name === record.resourceName)
+  if (res) {
+    shortageResourceId.value = res.id
+  }
+  shortageHospital.value = record.hospital
+  shortageQty.value = record.qty
+  shortageResult.value = {
+    targetHospital: record.hospital,
+    resourceName: record.resourceName,
+    qty: record.qty,
+    recommendations: record.recommendations || [],
+    time: record.time,
+  }
+  showRecommendationDialog.value = true
+}
 const confirmAlarm = () => { stopWarning(); alarmVisible.value = false }
 const dismissAlarm = () => { stopWarning(); alarmVisible.value = false }
 const handleViewChange = (mode) => { viewMode.value = mode }
 const togglePanels = () => { showPanels.value = !showPanels.value }
+const toggleBottomPanel = () => { bottomPanelExpanded.value = !bottomPanelExpanded.value }
 const handleSystemAlarm = (e) => { const d = e.detail || {}; triggerAlarm(d.message, d.type, d.batteryLevel) }
 
 onMounted(async () => {
@@ -442,6 +626,47 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 <template>
   <LoadingScreen />
   <div id="cesiumContainer"></div>
+  <div v-if="showShortagePrompt && shortageResult" class="center-prompt-mask">
+    <div class="center-prompt-card">
+      <div class="title">📚 急缺发布记录</div>
+      <div class="history-list">
+        <div class="history-row" v-for="item in shortageHistory" :key="item.id">
+          <div class="line1">
+            <span class="hosp">{{ item.hospital }}</span>
+            <span class="time">{{ item.time }}</span>
+          </div>
+          <div class="line2">
+            急缺：{{ item.resourceName }} × {{ item.qty }}
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" @click="goDispatchFromPrompt">去调度</button>
+        <button @click="showShortagePrompt = false">稍后</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="showRecommendationDialog && shortageResult" class="center-prompt-mask">
+    <div class="recommend-card">
+      <div class="title">🏥 推荐支援医院列表</div>
+      <div class="desc">
+        目标：{{ shortageResult.targetHospital }} ｜ 物资：{{ shortageResult.resourceName }} x{{ shortageResult.qty }}
+      </div>
+      <div class="rec-list">
+        <div class="rec-row" v-for="rec in shortageResult.recommendations" :key="`dlg-${rec.hospital}-${rec.score}`">
+          <div class="left">
+            <div class="name">{{ rec.hospital }}</div>
+            <div class="meta">库存 {{ rec.stock }} · 距离 {{ rec.distanceKm }}km · 评分 {{ rec.score }}</div>
+          </div>
+          <button class="primary" @click="applyRecommendation(rec)">去调度</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button @click="showRecommendationDialog = false">关闭</button>
+      </div>
+    </div>
+  </div>
   
   <div class="header-bar">
     <h2>无人机调度监控系统 - 医院资源调配可视化平台</h2>
@@ -453,8 +678,8 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 
   <div v-if="showPanels">
     <Dashboard
-      :hospitalName="selectedEndNode"
-      :needsData="currentNeeds"
+      :shortageHistory="shortageHistory"
+      @go-dispatch="openDispatchForRecord"
     />
 
     <DroneCam v-if="showCamera && activeDroneEntity && viewerRef" :mainViewer="viewerRef" :vehicle="activeDroneEntity" @close="closeCamera" />
@@ -488,23 +713,51 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 
     <div class="ui-layer">
       <div class="left-panel">
+
+        <PanelBox title="🚨 医院急缺求助发布" class="left-accordion-item">
+          <template #header-extra>
+            <button class="panel-fold-btn" @click.stop="shortageOpen = !shortageOpen">
+              {{ shortageOpen ? '收起' : '展开' }}
+            </button>
+          </template>
+          <div v-if="shortageOpen" class="dispatch-form" @click.stop>
+            <div class="form-row">
+              <span class="label">急缺院</span>
+              <select v-model="shortageHospital" class="cyber-select">
+                <option value="" disabled>请选择医院</option>
+                <option v-for="h in hospitals" :key="`short-${h.name}`" :value="h.name">{{ h.name }}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <span class="label">急缺物资</span>
+              <select v-model="shortageResourceId" class="cyber-select">
+                <option :value="null" disabled>请选择物资</option>
+                <option v-for="r in resources" :key="`short-res-${r.id}`" :value="r.id">{{ r.name }}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <span class="label">急缺量</span>
+              <input type="number" v-model="shortageQty" class="cyber-input" min="1" max="999">
+            </div>
+            <button class="mega-dispatch-btn" @click="publishShortageRequest">
+              📣 发布紧缺并求助
+            </button>
+          </div>
+        </PanelBox>
         
-        <PanelBox title="🚑 应急物资调拨指令台">
-          <div class="dispatch-form">
+        <PanelBox title="🚑 应急物资调拨指令台" class="left-accordion-item">
+          <template #header-extra>
+            <button class="panel-fold-btn" @click.stop="dispatchOpen = !dispatchOpen">
+              {{ dispatchOpen ? '收起' : '展开' }}
+            </button>
+          </template>
+          <div v-if="dispatchOpen" class="dispatch-form" @click.stop>
             <div class="form-row">
               <span class="label">起点仓</span>
               <select v-model="selectedStartNode" class="cyber-select">
                 <option v-for="node in startNodes" :key="node" :value="node">{{ node }}</option>
               </select>
             </div>
-            <div class="form-row">
-              <span class="label">AI起点</span>
-              <label class="ai-start-toggle">
-                <input type="checkbox" v-model="aiPreferTollStart" />
-                <span>优先收费站发车（高速进城演示）</span>
-              </label>
-            </div>
-            
             <div class="form-row">
               <span class="label">目标院</span>
               <select v-model="selectedEndNode" class="cyber-select">
@@ -524,19 +777,28 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
               <input type="number" v-model="dispatchQuantity" class="cyber-input" min="1" max="500">
             </div>
 
-            <div v-if="selectedResource" class="needs-hint">
-              当前 {{ selectedEndNode }} 缺口: 
-              <span class="highlight">{{ currentNeeds[selectedResource.name] || 0 }}</span>
+            <div class="form-row">
+              <span class="label">道路拥堵</span>
+              <select v-model="roadCongestionLevel" class="cyber-select">
+                <option value="low">低拥堵（偏救护车）</option>
+                <option value="mid">中拥堵（综合评估）</option>
+                <option value="high">高拥堵（偏无人机）</option>
+              </select>
             </div>
 
             <button class="mega-dispatch-btn" @click="handleAIDispatch">
-              🚀 AI 智能匹配可用运力发货
+              🚀 调度可用运力
             </button>
           </div>
         </PanelBox>
         
-        <PanelBox title="📡 机队指挥中心">
-          <div class="fleet-stats">
+        <PanelBox title="📡 运力" class="left-accordion-item">
+          <template #header-extra>
+            <button class="panel-fold-btn" @click.stop="fleetOpen = !fleetOpen">
+              {{ fleetOpen ? '收起' : '展开' }}
+            </button>
+          </template>
+          <div v-if="fleetOpen" class="fleet-stats" @click.stop>
             <div class="stat-box">
               <span class="num blue">{{ fleetStats.total }}</span>
               <span class="text">总运力</span>
@@ -551,12 +813,18 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
             </div>
           </div>
 
-          <div class="vehicle-list">
+          <div v-if="fleetOpen" class="vehicle-list" @click.stop>
             <div v-for="item in fleetList" :key="item.id" class="resource-item" :class="{ 'is-busy': item.status !== '待命' }">
               <div class="info">
                 <div class="name">[{{ item.type }}] {{ item.id }}</div>
                 <div class="details">
-                  <span class="detail" :class="{'low-battery': item.battery < 30}">电量: {{ item.battery }}%</span>
+                  <span
+                    v-if="item.type === '无人机'"
+                    class="detail"
+                    :class="{'low-battery': item.battery < 30}"
+                  >
+                    电量: {{ item.battery }}%
+                  </span>
                   <span class="detail status" :class="{'ready': item.status === '待命'}">{{ item.status }}</span>
                 </div>
               </div>
@@ -576,6 +844,12 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
       </div>
 
       <div class="bottom-panel">
+        <button class="bottom-panel-toggle" @click="toggleBottomPanel">
+          {{ bottomPanelExpanded ? '收起监控' : '展开监控' }}
+        </button>
+      </div>
+
+      <div class="bottom-panel-expanded" v-if="bottomPanelExpanded">
         <BottomPanel ref="bottomPanelRef" :logs="systemLogs" />
       </div>
     </div>
@@ -632,17 +906,21 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 /* ==== 模块一：派单表单样式 ==== */
 .dispatch-form { display: flex; flex-direction: column; gap: 9px; }
 .form-row { display: flex; align-items: center; gap: 8px; }
-.form-row .label { color: rgba(255,255,255,0.7); font-size: 12px; width: 48px; }
-.ai-start-toggle {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: rgba(255,255,255,0.85);
+.form-row .label {
+  color: rgba(255,255,255,0.7);
   font-size: 12px;
+  width: 62px;
+  min-width: 62px;
+  white-space: nowrap;
+  word-break: keep-all;
 }
-.cyber-select, .cyber-input { flex: 1; background: rgba(0, 20, 40, 0.6); color: #00d2ff; border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 4px; padding: 5px 8px; font-size: 12px; outline: none; transition: border-color 0.3s; }
+.cyber-select, .cyber-input { flex: 1; background: rgba(0, 20, 40, 0.6); color: #00d2ff; border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 4px; padding: 5px 8px; font-size: 12px; outline: none; transition: border-color 0.3s; min-width: 0; box-sizing: border-box; }
 .cyber-select:focus, .cyber-input:focus { border-color: #00d2ff; box-shadow: 0 0 8px rgba(0, 210, 255, 0.5); }
+.cyber-select {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .cyber-select option { background: #001220; color: #fff; }
 .needs-hint { font-size: 12px; color: rgba(255,255,255,0.6); text-align: right; margin-top: -6px; }
 .needs-hint .highlight { color: #ff4d4f; font-weight: bold; font-size: 14px; }
@@ -679,11 +957,186 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 .manual-dispatch-btn { background: rgba(0, 210, 255, 0.15); border: 1px solid #00d2ff; color: #00d2ff; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; transition: all 0.2s; }
 .manual-dispatch-btn:hover:not(:disabled) { background: #00d2ff; color: #000; box-shadow: 0 0 10px rgba(0,210,255,0.5); }
 .manual-dispatch-btn:disabled { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: rgba(255,255,255,0.3); cursor: not-allowed; }
+.panel-fold-btn {
+  border: 1px solid rgba(0, 210, 255, 0.35);
+  background: rgba(0, 0, 0, 0.42);
+  color: #9fe9ff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.panel-fold-btn:hover {
+  background: rgba(0, 210, 255, 0.15);
+}
 
 </style>
 <style>
 .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: 14px; box-sizing: border-box; display: flex; justify-content: space-between; }
 .ui-layer .panel-box, .ui-layer .panel-box * { pointer-events: auto; }
 .left-panel { width: clamp(300px, 20vw, 350px); display: flex; flex-direction: column; gap: 12px; }
-.bottom-panel { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); width: 760px; max-width: 86vw; }
+.bottom-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  pointer-events: auto;
+}
+.bottom-panel-toggle {
+  border: 1px solid rgba(0, 210, 255, 0.45);
+  background: rgba(0, 0, 0, 0.72);
+  color: #9be7ff;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.2);
+}
+.bottom-panel-toggle:hover {
+  background: rgba(0, 210, 255, 0.18);
+}
+.bottom-panel-expanded {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  width: min(760px, 86vw);
+  max-height: 36vh;
+  pointer-events: auto;
+  z-index: 2500;
+}
+
+/* 左侧业务面板整体下移，避开顶部标题层的点击覆盖 */
+.left-panel {
+  margin-top: 56px;
+}
+
+.center-prompt-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.36);
+  z-index: 3200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.center-prompt-card,
+.recommend-card {
+  width: min(560px, 86vw);
+  background: rgba(4, 12, 22, 0.92);
+  border: 1px solid rgba(0, 210, 255, 0.4);
+  border-radius: 10px;
+  box-shadow: 0 0 30px rgba(0, 210, 255, 0.2);
+  padding: 16px;
+  color: #e7f8ff;
+}
+.center-prompt-card .title,
+.recommend-card .title {
+  font-size: 18px;
+  color: #7ee7ff;
+  font-weight: 700;
+}
+.center-prompt-card .desc,
+.recommend-card .desc {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 18px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.history-list {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-row {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.history-row .line1 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.history-row .hosp {
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 13px;
+}
+.history-row .time {
+  color: #9adfff;
+  font-size: 11px;
+}
+.history-row .line2 {
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 12px;
+}
+.detail-grid .k {
+  color: rgba(173, 230, 255, 0.78);
+}
+.detail-grid .v {
+  color: #ffffff;
+  font-weight: 700;
+}
+.actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.actions button,
+.rec-row button {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e5f7ff;
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.actions .primary,
+.rec-row .primary {
+  border-color: rgba(0, 210, 255, 0.65);
+  background: rgba(0, 210, 255, 0.2);
+  color: #9defff;
+}
+.rec-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rec-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+.rec-row .name {
+  font-size: 13px;
+  color: #fff;
+  font-weight: 700;
+}
+.rec-row .meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.72);
+}
 </style>

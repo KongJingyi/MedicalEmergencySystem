@@ -188,6 +188,169 @@ export function useDrone(viewerRef, hospitalPressure) {
     return color
   }
 
+  // 12. 3D 特性增强层（遮挡预警 / 空域分层走廊）
+  const demoOverlayEntities = []
+  const activeDroneRoutes = []
+
+  const clear3DDemoOverlays = () => {
+    const viewer = viewerRef.value
+    if (!viewer) return
+    while (demoOverlayEntities.length > 0) {
+      const ent = demoOverlayEntities.pop()
+      if (ent) viewer.entities.remove(ent)
+    }
+  }
+
+  const haversineM = (lng1, lat1, lng2, lat2) => {
+    const toRad = (d) => (d * Math.PI) / 180
+    const R = 6371000
+    const dLat = toRad(lat2 - lat1)
+    const dLng = toRad(lng2 - lng1)
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  }
+
+  const getAirLayer = (alt) => {
+    if (alt >= 120) return { id: 'L3', color: Cesium.Color.VIOLET }
+    if (alt >= 90) return { id: 'L2', color: Cesium.Color.CYAN }
+    return { id: 'L1', color: Cesium.Color.LIME }
+  }
+
+  // 演示用“高楼密集区”判定（近似矩形），用于突出 3D 遮挡分析价值
+  const inDenseBuildingZone = (lng, lat) => {
+    return lng >= 116.36 && lng <= 116.43 && lat >= 39.89 && lat <= 39.95
+  }
+
+  const countActiveDrones = () => {
+    let n = 0
+    droneFleet.forEach((v, id) => {
+      if (String(id).startsWith('drone')) n += 1
+    })
+    return n
+  }
+
+  const hasRouteConflict = (pathWithAltitude) => {
+    if (!Array.isArray(pathWithAltitude) || pathWithAltitude.length < 2) return false
+    const thresholdM = 120 // 航线点间距阈值
+    const current2d = pathWithAltitude.map((p) => [p[0], p[1]])
+    for (const other of activeDroneRoutes) {
+      const other2d = other.path2d || []
+      for (const a of current2d) {
+        for (const b of other2d) {
+          if (haversineM(a[0], a[1], b[0], b[1]) <= thresholdM) return true
+        }
+      }
+    }
+    return false
+  }
+
+  const applyAirLayerAltitude = (pathWithAltitude, layerAlt) => {
+    if (!Array.isArray(pathWithAltitude)) return pathWithAltitude
+    return pathWithAltitude.map(([lng, lat]) => [lng, lat, layerAlt])
+  }
+
+  const addAirLayerCorridor = (pathWithAltitude) => {
+    const viewer = viewerRef.value
+    if (!viewer || !Array.isArray(pathWithAltitude) || pathWithAltitude.length < 2) return
+
+    const groups = new Map()
+    for (const p of pathWithAltitude) {
+      const layer = getAirLayer(Number(p[2] || 0))
+      if (!groups.has(layer.id)) {
+        groups.set(layer.id, { color: layer.color, points: [] })
+      }
+      groups.get(layer.id).points.push(p)
+    }
+
+    for (const [layerId, data] of groups.entries()) {
+      if (!data.points || data.points.length < 2) continue
+      const flat = []
+      data.points.forEach(([lng, lat, alt]) => flat.push(lng, lat, alt))
+      const entity = viewer.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat),
+          width: 10,
+          material: data.color.withAlpha(0.16),
+          clampToGround: false,
+        },
+      })
+      demoOverlayEntities.push(entity)
+
+      const mid = data.points[Math.floor(data.points.length / 2)]
+      if (mid) {
+        const labelEnt = viewer.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(mid[0], mid[1], Number(mid[2] || 0) + 15),
+          label: {
+            text: `空域走廊 ${layerId}`,
+            font: '12px sans-serif',
+            fillColor: data.color,
+            showBackground: true,
+            backgroundColor: Cesium.Color.BLACK.withAlpha(0.55),
+            pixelOffset: new Cesium.Cartesian2(0, -8),
+          },
+        })
+        demoOverlayEntities.push(labelEnt)
+      }
+    }
+  }
+
+  const addOcclusionRiskHighlights = (pathWithAltitude) => {
+    const viewer = viewerRef.value
+    if (!viewer || !Array.isArray(pathWithAltitude) || pathWithAltitude.length < 2) return
+
+    const riskSegments = []
+    for (let i = 1; i < pathWithAltitude.length; i++) {
+      const a = pathWithAltitude[i - 1]
+      const b = pathWithAltitude[i]
+      const midLng = (a[0] + b[0]) / 2
+      const midLat = (a[1] + b[1]) / 2
+      const alt = Number(((a[2] || 0) + (b[2] || 0)) / 2)
+      if (inDenseBuildingZone(midLng, midLat) && alt < 110) {
+        riskSegments.push([a, b])
+      }
+    }
+
+    if (!riskSegments.length) return
+
+    riskSegments.forEach(([a, b]) => {
+      const ent = viewer.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights([
+            a[0], a[1], Number(a[2] || 0),
+            b[0], b[1], Number(b[2] || 0),
+          ]),
+          width: 7,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            glowPower: 0.35,
+            color: Cesium.Color.RED.withAlpha(0.95),
+          }),
+          clampToGround: false,
+        },
+      })
+      demoOverlayEntities.push(ent)
+    })
+
+    const first = riskSegments[0][0]
+    if (first) {
+      const warnEnt = viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(first[0], first[1], Number(first[2] || 0) + 18),
+        label: {
+          text: '⚠ 建筑遮挡高风险区',
+          font: '13px sans-serif',
+          fillColor: Cesium.Color.RED,
+          showBackground: true,
+          backgroundColor: Cesium.Color.BLACK.withAlpha(0.62),
+          pixelOffset: new Cesium.Cartesian2(0, -10),
+        },
+      })
+      demoOverlayEntities.push(warnEnt)
+    }
+
+    triggerSystemAlarm('检测到低空航路穿越楼群，已标记遮挡风险段。', 'occlusion_risk', null)
+  }
+
   // 11. 当前任务的“起终点医院”临时标注（按实际路径首尾点绘制）
   const routeEndpointEntities = []
 
@@ -373,6 +536,7 @@ export function useDrone(viewerRef, hospitalPressure) {
         }
 
         routeProfile.value = profileData
+        clear3DDemoOverlays()
 
         // 🌟 视觉盛宴：地空独立渲染样式！
         viewerRef.value.entities.add({
@@ -398,6 +562,20 @@ export function useDrone(viewerRef, hospitalPressure) {
             clampToGround: !isDrone,
           },
         })
+
+        // 🌟 自动触发 3D 优势：多机且航线冲突 -> 分层走廊 + 遮挡预警
+        if (isDrone) {
+          const activeDroneCount = countActiveDrones()
+          const conflict = activeDroneCount >= 1 && hasRouteConflict(pathWithAltitude)
+          if (conflict) {
+            // 冲突时将当前无人机抬升到独立空域层
+            const layerAlts = [70, 95, 120]
+            const layerAlt = layerAlts[activeDroneCount % layerAlts.length]
+            pathWithAltitude.splice(0, pathWithAltitude.length, ...applyAirLayerAltitude(pathWithAltitude, layerAlt))
+            addAirLayerCorridor(pathWithAltitude)
+            addOcclusionRiskHighlights(pathWithAltitude)
+          }
+        }
 
         // 🌟 避障段高亮：当无人机出现明显抬升时，叠加一条洋红色高亮线用于解释“AI 正在绕障”
         if (isDrone && pathWithAltitude.length >= 2) {
@@ -472,6 +650,12 @@ export function useDrone(viewerRef, hospitalPressure) {
 
     // 将新载体加入机队统一管理
     droneFleet.set(id, newVehicle);
+    if (isDrone && Array.isArray(pathData) && pathData.length > 0) {
+      activeDroneRoutes.push({
+        id,
+        path2d: pathData.map((p) => [p[0], p[1]]),
+      })
+    }
 
     // 关联第一视角，自动打开无人机视角
     activeDroneEntity.value = markRaw(newVehicle.entity);
@@ -558,6 +742,8 @@ export function useDrone(viewerRef, hospitalPressure) {
     // 清空机队映射
     droneFleet.clear();
     clearRouteEndpointMarkers()
+    clear3DDemoOverlays()
+    activeDroneRoutes.splice(0, activeDroneRoutes.length)
     // 关闭第一视角
     closeCamera();
 

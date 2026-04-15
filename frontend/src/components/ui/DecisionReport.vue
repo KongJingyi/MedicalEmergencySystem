@@ -2,7 +2,7 @@
   <transition name="cyber-fade">
     <div v-if="visible" class="decision-modal">
       <div class="modal-header">
-        <h3>🧠 AI 智能调度决策报告</h3>
+        <h3>🧠 智能调度决策报告</h3>
         <button class="close-btn" @click="close">×</button>
       </div>
 

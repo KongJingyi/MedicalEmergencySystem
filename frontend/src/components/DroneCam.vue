@@ -17,6 +17,11 @@ let miniViewer = null
 let removeListener = null
 
 const thermalMode = ref(false)
+const vehicleTypeText = ref('无人机')
+const manualTakeover = ref(false)
+const manualYawOffset = ref(0) // degree
+const manualAltBias = ref(0) // meter
+const manualSpeedScale = ref(1.0)
 const speed = ref(0)
 const distance = ref(0)
 const altitude = ref(0)
@@ -42,6 +47,33 @@ const animateNumber = (current, target, setter, step = 1) => {
 
 let animationFrame = null
 let lastUpdateTime = 0
+
+const panelTitle = computed(() => {
+  return vehicleTypeText.value === '救护车' ? '救护车第一视角' : '无人机第一视角'
+})
+const isDroneView = computed(() => vehicleTypeText.value === '无人机')
+
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
+
+const toggleManualTakeover = () => {
+  playClick()
+  manualTakeover.value = !manualTakeover.value
+  if (!manualTakeover.value) {
+    manualYawOffset.value = 0
+    manualAltBias.value = 0
+    manualSpeedScale.value = 1.0
+  }
+}
+
+const manualControl = (action) => {
+  playClick()
+  if (!manualTakeover.value) manualTakeover.value = true
+  if (action === 'left') manualYawOffset.value = clamp(manualYawOffset.value - 8, -45, 45)
+  if (action === 'right') manualYawOffset.value = clamp(manualYawOffset.value + 8, -45, 45)
+  if (action === 'descend') manualAltBias.value = clamp(manualAltBias.value - 10, -60, 20)
+  if (action === 'faster') manualSpeedScale.value = clamp(manualSpeedScale.value + 0.15, 0.5, 2.0)
+  if (action === 'slower') manualSpeedScale.value = clamp(manualSpeedScale.value - 0.15, 0.5, 2.0)
+}
 
 const getMainViewer = () => {
   if (!props.mainViewer) return null
@@ -142,8 +174,11 @@ const syncCamera = () => {
 
     const headingAngle = computeForwardHeadingFromPath() ?? hpr.heading
     const vehicleType = rawVehicle?.properties?.vehicleType?.getValue?.(time) || null
+    vehicleTypeText.value = vehicleType === 'AMBULANCE' ? '救护车' : '无人机'
     const behind = vehicleType === 'AMBULANCE' ? 25 : 40
     const up = vehicleType === 'AMBULANCE' ? 6 : 12
+    const finalHeading = headingAngle + Cesium.Math.toRadians(manualTakeover.value ? manualYawOffset.value : 0)
+    const finalUp = up + (manualTakeover.value ? manualAltBias.value : 0)
 
     const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position)
     const east = Cesium.Matrix4.getColumn(enu, 0, new Cesium.Cartesian3())
@@ -159,7 +194,7 @@ const syncCamera = () => {
     )
 
     const behindOffset = Cesium.Cartesian3.multiplyByScalar(forward, -behind, new Cesium.Cartesian3())
-    const upOffset = Cesium.Cartesian3.multiplyByScalar(upVec, up, new Cesium.Cartesian3())
+    const upOffset = Cesium.Cartesian3.multiplyByScalar(upVec, finalUp, new Cesium.Cartesian3())
     const destination = Cesium.Cartesian3.add(
       Cesium.Cartesian3.add(position, behindOffset, new Cesium.Cartesian3()),
       upOffset,
@@ -169,7 +204,7 @@ const syncCamera = () => {
     miniViewer.camera.setView({
       destination,
       orientation: {
-        heading: headingAngle,
+        heading: finalHeading,
         pitch: 0.0, // 平行地面看向正前方
         roll: 0.0,
       }
@@ -178,11 +213,11 @@ const syncCamera = () => {
     const cartographic = Cesium.Cartographic.fromCartesian(position)
     altitude.value = cartographic.height
     
-    speed.value = Math.random() * 30 + 45
+    speed.value = (Math.random() * 30 + 45) * (manualTakeover.value ? manualSpeedScale.value : 1.0)
     distance.value = Math.random() * 2 + 0.5
     pitch.value = 0
     roll.value = 0
-    heading.value = Cesium.Math.toDegrees(headingAngle)
+    heading.value = Cesium.Math.toDegrees(finalHeading)
   }
 }
 
@@ -212,7 +247,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PanelBox title="无人机第一视角" class="drone-cam-panel">
+  <PanelBox :title="panelTitle" class="drone-cam-panel">
     <template #header-extra>
       <span class="rec-dot">●</span>
       <span class="rec-text">REC</span>
@@ -285,6 +320,22 @@ onBeforeUnmount(() => {
         
         <div class="mode-indicator" v-if="thermalMode">
           <span class="mode-text">🌡️ 热成像模式</span>
+        </div>
+
+        <div class="manual-takeover" v-if="isDroneView">
+          <div class="takeover-head">
+            <span>人工接管</span>
+            <button class="takeover-toggle" :class="{ active: manualTakeover }" @click="toggleManualTakeover">
+              {{ manualTakeover ? '已接管' : '接管' }}
+            </button>
+          </div>
+          <div class="takeover-controls">
+            <button @click="manualControl('left')">左转</button>
+            <button @click="manualControl('right')">右转</button>
+            <button @click="manualControl('descend')">下降</button>
+            <button @click="manualControl('faster')">加速</button>
+            <button @click="manualControl('slower')">减速</button>
+          </div>
         </div>
         
         <div class="corner-bracket top-left"></div>
@@ -487,6 +538,59 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 77, 79, 0.6);
   border-radius: 4px;
   padding: 4px 12px;
+}
+
+.manual-takeover {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  background: rgba(0, 0, 0, 0.68);
+  border: 1px solid rgba(0, 210, 255, 0.35);
+  border-radius: 6px;
+  padding: 6px 8px;
+  pointer-events: auto;
+}
+
+.takeover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #d8f4ff;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.takeover-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: #d8f4ff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.takeover-toggle.active {
+  border-color: rgba(0, 255, 136, 0.6);
+  background: rgba(0, 255, 136, 0.18);
+  color: #9affcf;
+}
+
+.takeover-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.takeover-controls button {
+  border: 1px solid rgba(0, 210, 255, 0.35);
+  background: rgba(0, 210, 255, 0.1);
+  color: #bfefff;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 10px;
+  cursor: pointer;
 }
 
 .mode-text {

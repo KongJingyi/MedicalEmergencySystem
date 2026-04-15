@@ -189,7 +189,7 @@ defineProps({
 .panel-content {
   position: relative;
   z-index: 2;
-  height: calc(100% - 40px);
-  overflow: hidden;
+  height: auto;
+  overflow: visible;
 }
 </style>
