@@ -88,6 +88,21 @@ def gcj02_to_wgs84(lng, lat):
     # 精确计算标准 WGS-84 坐标
     return lng * 2 - mglng, lat * 2 - mglat
 
+
+def wgs84_to_gcj02(lng, lat):
+    """
+    将 WGS-84 坐标近似转换为 GCJ-02（用于请求高德驾车 API）。
+    """
+    dlat = _transformlat(lng - 105.0, lat - 35.0)
+    dlng = _transformlng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * math.pi
+    magic = math.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * math.pi)
+    dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * math.pi)
+    return lng + dlng, lat + dlat
+
 from database import get_session
 from models import MedicalResource, RouteRequest, Hospital, DispatchTask, RiskEvent, DecisionLog
 from algorithms import (
@@ -450,16 +465,20 @@ def get_amap_driving_route(start_lng, start_lat, end_lng, end_lat):
     # 必须通过环境变量提供 Web 服务 Key，禁止硬编码进仓库
     api_key = os.getenv("AMAP_API_KEY")
     if not api_key:
-        print("⚠️ 未配置环境变量 AMAP_API_KEY，将跳过高德寻路并回退到本地路网 compute_route。")
+        print("⚠️ 未配置环境变量 AMAP_API_KEY，救护车高德路线不可用。")
         return []
+
+    # 高德 WebAPI 输入为 GCJ-02
+    start_gcj_lng, start_gcj_lat = wgs84_to_gcj02(start_lng, start_lat)
+    end_gcj_lng, end_gcj_lat = wgs84_to_gcj02(end_lng, end_lat)
 
     url = (
         "https://restapi.amap.com/v3/direction/driving"
-        f"?origin={start_lng},{start_lat}&destination={end_lng},{end_lat}&key={api_key}"
+        f"?origin={start_gcj_lng},{start_gcj_lat}&destination={end_gcj_lng},{end_gcj_lat}&key={api_key}"
     )
 
     try:
-        response = requests.get(url, timeout=3).json()
+        response = requests.get(url, timeout=5).json()
         if response.get("status") == "1" and response.get("route", {}).get("paths"):
             path_points = []
             steps = response["route"]["paths"][0]["steps"]
@@ -471,23 +490,14 @@ def get_amap_driving_route(start_lng, start_lat, end_lng, end_lat):
                     # 🌟 关键修改：将加密的 GCJ-02 转换为标准 WGS-84
                     wgs_lng, wgs_lat = gcj02_to_wgs84(lng, lat)
                     path_points.append([wgs_lng, wgs_lat])
+            # 保证起终点贴到业务点位，避免可视化边缘偏差
+            if path_points:
+                path_points[0] = [start_lng, start_lat]
+                path_points[-1] = [end_lng, end_lat]
             return path_points  # 返回几百个密集坐标点
     except Exception as e:
-        print(f"⚠️ 高德 API 超时或断网，启动离线兜底路网生成！({e})")
-
-    # 🌟 终极兜底：如果没网，在起终点之间生成一条带扰动的模拟公路！
-    fallback_path = []
-    steps = 15
-    for i in range(steps + 1):
-        t = i / steps
-        lng = start_lng + (end_lng - start_lng) * t
-        lat = start_lat + (end_lat - start_lat) * t
-        # 给中间的点加点锯齿，让它看起来像条路，而不是绝对直线
-        if 0 < i < steps:
-            lng += (random.random() - 0.5) * 0.005
-            lat += (random.random() - 0.5) * 0.005
-        fallback_path.append([lng, lat])
-    return fallback_path
+        print(f"❌ 高德 API 请求失败: {e}")
+    return []
 
 
 def _haversine_distance_m(lng1: float, lat1: float, lng2: float, lat2: float) -> float:

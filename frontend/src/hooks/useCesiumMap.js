@@ -192,10 +192,7 @@ export function useCesiumMap() {
       duration: 3 
     });
 
-    // 6. 添加标记点到地图
-    addMarkers(viewer);
-
-    // 7. 加载医院与路网图层（默认开启）
+    // 6. 加载医院与路网图层（默认开启）
     await Promise.all([loadHospitals(viewer), loadRoadNodes(viewer)])
 
     // 将实例挂载到 ref 并暴露到全局（方便调试）

@@ -68,7 +68,7 @@ defineProps({
   -webkit-backdrop-filter: blur(15px);
   border: 1px solid rgba(0, 210, 255, 0.3);
   border-radius: 6px;
-  padding: 14px;
+  padding: 10px;
   box-shadow: 
     0 0 25px rgba(0, 210, 255, 0.15),
     0 0 50px rgba(0, 210, 255, 0.05),
@@ -148,8 +148,8 @@ defineProps({
   position: relative;
   display: flex;
   align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
   border-bottom: 1px solid rgba(0, 210, 255, 0.25);
   z-index: 2;
 }
@@ -170,10 +170,10 @@ defineProps({
 .header-title {
   color: #00d2ff;
   font-family: 'Orbitron', 'Roboto Mono', monospace;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 2px;
+  letter-spacing: 1px;
   text-shadow: 
     0 0 10px rgba(0, 210, 255, 0.6),
     0 0 20px rgba(0, 210, 255, 0.3);

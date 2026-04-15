@@ -2,7 +2,6 @@
 import { ref, reactive, markRaw, watch, computed } from 'vue'
 import axios from 'axios'
 import * as Cesium from 'cesium'
-import gcoord from 'gcoord'
 import { Drone } from '../classes/Drone'
 import { WeatherSystem } from '../classes/WeatherSystem'
 
@@ -189,6 +188,66 @@ export function useDrone(viewerRef, hospitalPressure) {
     return color
   }
 
+  // 11. 当前任务的“起终点医院”临时标注（按实际路径首尾点绘制）
+  const routeEndpointEntities = []
+
+  const clearRouteEndpointMarkers = () => {
+    const viewer = viewerRef.value
+    if (!viewer) return
+    while (routeEndpointEntities.length > 0) {
+      const ent = routeEndpointEntities.pop()
+      if (ent) viewer.entities.remove(ent)
+    }
+  }
+
+  const drawRouteEndpointMarkers = (path, startName, endName) => {
+    const viewer = viewerRef.value
+    if (!viewer || !Array.isArray(path) || path.length < 2) return
+
+    clearRouteEndpointMarkers()
+
+    const [sLng, sLat] = path[0]
+    const [eLng, eLat] = path[path.length - 1]
+
+    const startEnt = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(sLng, sLat, 12),
+      point: {
+        pixelSize: 11,
+        color: Cesium.Color.LIME.withAlpha(0.95),
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.9),
+        outlineWidth: 2,
+      },
+      label: {
+        text: `起点: ${startName || '医院A'}`,
+        font: '13px sans-serif',
+        pixelOffset: new Cesium.Cartesian2(0, -26),
+        fillColor: Cesium.Color.WHITE,
+        showBackground: true,
+        backgroundColor: new Cesium.Color(0.05, 0.35, 0.15, 0.72),
+      },
+    })
+
+    const endEnt = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(eLng, eLat, 12),
+      point: {
+        pixelSize: 12,
+        color: Cesium.Color.RED.withAlpha(0.95),
+        outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
+        outlineWidth: 2,
+      },
+      label: {
+        text: `终点: ${endName || '医院B'}`,
+        font: '13px sans-serif',
+        pixelOffset: new Cesium.Cartesian2(0, -26),
+        fillColor: Cesium.Color.WHITE,
+        showBackground: true,
+        backgroundColor: new Cesium.Color(0.5, 0.05, 0.05, 0.72),
+      },
+    })
+
+    routeEndpointEntities.push(startEnt, endEnt)
+  }
+
   const initWeather = () => {
     if (viewerRef.value && !weatherSystem) {
       weatherSystem = new WeatherSystem(viewerRef.value)
@@ -273,6 +332,9 @@ export function useDrone(viewerRef, hospitalPressure) {
           alert("⚠️ 路径点不足，无法绘制路径！请检查起终点名称是否在路网中。")
           return
         }
+
+        // 每次调度都按“当前路径首尾点”重绘医院起终点标注
+        drawRouteEndpointMarkers(wgs84Path, startNode, endNode)
 
         const profileData = []
         const pathWithAltitude = []
@@ -495,6 +557,7 @@ export function useDrone(viewerRef, hospitalPressure) {
     droneFleet.forEach(drone => drone.remove());
     // 清空机队映射
     droneFleet.clear();
+    clearRouteEndpointMarkers()
     // 关闭第一视角
     closeCamera();
 

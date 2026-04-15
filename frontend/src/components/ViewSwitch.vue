@@ -88,9 +88,9 @@ defineExpose({ viewMode })
 <style scoped>
 .view-switch {
   position: fixed;
-  top: 90px;
+  top: 128px;
   right: 20px;
-  z-index: 2000;
+  z-index: 1995;
 }
 
 .switch-container {
@@ -104,7 +104,7 @@ defineExpose({ viewMode })
   box-shadow: 
     0 0 20px rgba(0, 210, 255, 0.2),
     inset 0 0 30px rgba(0, 210, 255, 0.05);
-  width: 480px;
+  width: 390px;
   justify-content: center;
   box-sizing: border-box;
 }
@@ -118,11 +118,11 @@ defineExpose({ viewMode })
   background: transparent;
   border: none;
   color: rgba(255, 255, 255, 0.6);
-  padding: 12px 20px;
+  padding: 10px 12px;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.3s;
-  min-width: 80px;
+  min-width: 64px;
 }
 
 .switch-btn:hover {
@@ -139,13 +139,13 @@ defineExpose({ viewMode })
 }
 
 .btn-icon {
-  font-size: 24px;
+  font-size: 20px;
   line-height: 1;
 }
 
 .btn-text {
   font-family: 'Orbitron', 'Roboto Mono', monospace;
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 1px;
   font-weight: 600;
@@ -153,7 +153,7 @@ defineExpose({ viewMode })
 
 .switch-divider {
   width: 1px;
-  height: 40px;
+  height: 34px;
   background: rgba(0, 210, 255, 0.2);
   margin: 0 4px;
 }

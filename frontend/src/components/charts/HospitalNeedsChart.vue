@@ -193,12 +193,12 @@
   <style scoped>
   .chart-container {
     width: 100%;
-    height: 300px;
+    height: 240px;
     background:
       radial-gradient(900px 240px at 12% 0%, rgba(0, 210, 255, 0.08), transparent 55%),
       radial-gradient(800px 220px at 90% 20%, rgba(255, 77, 79, 0.06), transparent 60%);
     border-radius: 8px;
-    padding: 10px 12px 12px;
+    padding: 8px 10px 10px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -224,14 +224,14 @@
   .title {
     margin: 0;
     color: rgba(255,255,255,0.92);
-    font-size: 14px;
+    font-size: 13px;
     font-family: 'Orbitron', 'Rajdhani', sans-serif;
     letter-spacing: 1px;
     text-shadow: 0 0 14px rgba(0,210,255,0.25);
   }
   .subtitle {
     color: rgba(0,210,255,0.65);
-    font-size: 11px;
+    font-size: 10px;
     font-family: 'Rajdhani', sans-serif;
     letter-spacing: 0.5px;
   }

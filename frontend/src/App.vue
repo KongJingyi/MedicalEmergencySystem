@@ -28,8 +28,8 @@ const bottomPanelRef = ref(null)
 const decisionReportRef = ref(null)
 const viewMode = ref('2d')
 const showPanels = ref(true)
-const showHospitals = ref(true)
-const showRoadNodes = ref(true)
+const showHospitals = ref(false)
+const showRoadNodes = ref(false)
 const aiPreferTollStart = ref(true)
 
 const alarmVisible = ref(false)
@@ -412,6 +412,10 @@ const handleSystemAlarm = (e) => { const d = e.detail || {}; triggerAlarm(d.mess
 
 onMounted(async () => {
   await initMap('cesiumContainer')
+  // 需求：先不显示原始人工标注医院点，只保留按调度路径动态打点
+  toggleLayer('hospital', false)
+  // 去掉默认黄色路网节点点位
+  toggleLayer('road', false)
   const { loadOptimizedCityModel } = useTilesetManager(viewerRef)
   console.log("正在加载优化版 3D Tiles 城市模型...")
   const cloudTileset = await loadOptimizedCityModel(4589530, false)
@@ -582,11 +586,11 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 <style scoped>
 #cesiumContainer { width: 100vw; height: 100vh; }
 .header-bar { position: absolute; top: 0; left: 0; width: 100%; height: 60px; background: linear-gradient(to bottom, rgba(0,0,0,0.9), rgba(0,0,0,0)); z-index: 1000; display: flex; justify-content: center; align-items: center; }
-.header-bar h2 { color: var(--neon-blue); font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif; text-shadow: 0 0 10px var(--neon-blue); letter-spacing: 2px; margin: 0; font-size: 18px; font-weight: 600; }
+.header-bar h2 { color: var(--neon-blue); font-family: 'Orbitron', 'Roboto Mono', monospace, sans-serif; text-shadow: 0 0 10px var(--neon-blue); letter-spacing: 1px; margin: 0; font-size: 16px; font-weight: 600; }
 .ui-toggle-btn { position: absolute; top: 70px; right: 20px; z-index: 2000; background: rgba(0, 0, 0, 0.6); border: 1px solid var(--neon-blue); color: var(--neon-blue); padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
 .ui-toggle-btn:hover { background: rgba(0, 210, 255, 0.25); box-shadow: 0 0 10px rgba(0, 210, 255, 0.5); }
-.weather-controls { position: absolute; top: 20px; right: 20px; z-index: 2000; display: flex; gap: 10px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color); width: 480px; justify-content: center; }
-.weather-controls button { background: transparent; border: 1px solid var(--border-color); font-size: 20px; cursor: pointer; transition: all 0.3s; border-radius: 4px; padding: 5px 10px; color: var(--text-primary); }
+.weather-controls { position: absolute; top: 20px; right: 20px; z-index: 2000; display: flex; gap: 8px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); width: 390px; justify-content: center; }
+.weather-controls button { background: transparent; border: 1px solid var(--border-color); font-size: 16px; cursor: pointer; transition: all 0.3s; border-radius: 4px; padding: 4px 8px; color: var(--text-primary); }
 .weather-controls button:hover { transform: scale(1.2); background: rgba(0, 210, 255, 0.2); border-color: var(--neon-blue); box-shadow: 0 0 10px rgba(0, 210, 255, 0.4); }
 
 /* ==== 局部暴雨按钮：红色脉冲呼吸灯 ==== */
@@ -622,13 +626,13 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
   70% { box-shadow: 0 0 0 12px rgba(255, 77, 79, 0); }
   100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
 }
-.layer-controls { position: absolute; top: 80px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border-color); }
+.layer-controls { position: absolute; top: 74px; right: 20px; z-index: 1996; display: flex; flex-direction: column; gap: 6px; background: var(--bg-glass); backdrop-filter: blur(10px); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); }
 .layer-switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-primary); }
 
 /* ==== 模块一：派单表单样式 ==== */
-.dispatch-form { display: flex; flex-direction: column; gap: 12px; }
-.form-row { display: flex; align-items: center; gap: 10px; }
-.form-row .label { color: rgba(255,255,255,0.7); font-size: 13px; width: 50px; }
+.dispatch-form { display: flex; flex-direction: column; gap: 9px; }
+.form-row { display: flex; align-items: center; gap: 8px; }
+.form-row .label { color: rgba(255,255,255,0.7); font-size: 12px; width: 48px; }
 .ai-start-toggle {
   flex: 1;
   display: flex;
@@ -637,16 +641,16 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
   color: rgba(255,255,255,0.85);
   font-size: 12px;
 }
-.cyber-select, .cyber-input { flex: 1; background: rgba(0, 20, 40, 0.6); color: #00d2ff; border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 4px; padding: 6px 10px; font-size: 13px; outline: none; transition: border-color 0.3s; }
+.cyber-select, .cyber-input { flex: 1; background: rgba(0, 20, 40, 0.6); color: #00d2ff; border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 4px; padding: 5px 8px; font-size: 12px; outline: none; transition: border-color 0.3s; }
 .cyber-select:focus, .cyber-input:focus { border-color: #00d2ff; box-shadow: 0 0 8px rgba(0, 210, 255, 0.5); }
 .cyber-select option { background: #001220; color: #fff; }
 .needs-hint { font-size: 12px; color: rgba(255,255,255,0.6); text-align: right; margin-top: -6px; }
 .needs-hint .highlight { color: #ff4d4f; font-weight: bold; font-size: 14px; }
-.mega-dispatch-btn { margin-top: 10px; background: linear-gradient(90deg, rgba(0,210,255,0.2) 0%, rgba(0,210,255,0.6) 50%, rgba(0,210,255,0.2) 100%); border: 1px solid #00d2ff; color: #fff; padding: 12px; font-size: 14px; font-weight: bold; border-radius: 4px; cursor: pointer; text-shadow: 0 0 5px #00d2ff; box-shadow: 0 0 15px rgba(0, 210, 255, 0.3); transition: all 0.3s ease; }
+.mega-dispatch-btn { margin-top: 8px; background: linear-gradient(90deg, rgba(0,210,255,0.2) 0%, rgba(0,210,255,0.6) 50%, rgba(0,210,255,0.2) 100%); border: 1px solid #00d2ff; color: #fff; padding: 9px; font-size: 13px; font-weight: bold; border-radius: 4px; cursor: pointer; text-shadow: 0 0 5px #00d2ff; box-shadow: 0 0 15px rgba(0, 210, 255, 0.3); transition: all 0.3s ease; }
 .mega-dispatch-btn:hover { background: rgba(0, 210, 255, 0.8); box-shadow: 0 0 25px rgba(0, 210, 255, 0.6); transform: scale(1.02); }
 
 /* ==== 模块二：机队指挥中心样式 ==== */
-.fleet-stats { display: flex; justify-content: space-around; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 10px 0; margin-bottom: 12px; }
+.fleet-stats { display: flex; justify-content: space-around; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 8px 0; margin-bottom: 8px; }
 .stat-box { display: flex; flex-direction: column; align-items: center; }
 .stat-box .num { font-size: 20px; font-weight: bold; font-family: 'Orbitron', monospace; }
 .stat-box .text { font-size: 11px; color: rgba(255,255,255,0.6); margin-top: 4px; }
@@ -654,12 +658,12 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 .num.green { color: #00ffaa; text-shadow: 0 0 8px #00ffaa; }
 .num.red { color: #ff4d4f; text-shadow: 0 0 8px #ff4d4f; }
 
-.vehicle-list { max-height: 250px; overflow-y: auto; padding-right: 4px; }
+.vehicle-list { max-height: 210px; overflow-y: auto; padding-right: 4px; }
 .vehicle-list::-webkit-scrollbar { width: 4px; }
 .vehicle-list::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.5); }
 .vehicle-list::-webkit-scrollbar-thumb { background: var(--neon-blue); border-radius: 2px; }
 
-.resource-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); margin-bottom: 6px; border-radius: 4px; transition: all 0.3s; }
+.resource-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 7px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); margin-bottom: 5px; border-radius: 4px; transition: all 0.3s; }
 .resource-item:hover { background: rgba(0, 210, 255, 0.1); }
 .resource-item.is-busy { opacity: 0.7; }
 .resource-item .name { color: #fff; font-size: 13px; font-weight: bold; margin-bottom: 4px; }
@@ -678,8 +682,8 @@ onBeforeUnmount(() => { window.removeEventListener('system-alarm', handleSystemA
 
 </style>
 <style>
-.ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: 20px; box-sizing: border-box; display: flex; justify-content: space-between; }
+.ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: 14px; box-sizing: border-box; display: flex; justify-content: space-between; }
 .ui-layer .panel-box, .ui-layer .panel-box * { pointer-events: auto; }
-.left-panel { width: clamp(320px, 22vw, 380px); display: flex; flex-direction: column; gap: 16px; }
-.bottom-panel { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 900px; max-width: 90vw; }
+.left-panel { width: clamp(300px, 20vw, 350px); display: flex; flex-direction: column; gap: 12px; }
+.bottom-panel { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); width: 760px; max-width: 86vw; }
 </style>

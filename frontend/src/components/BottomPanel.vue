@@ -130,21 +130,21 @@ onBeforeUnmount(() => {
 <style scoped>
 .tab-container {
   display: flex;
-  gap: 10px;
-  padding: 10px 0;
+  gap: 8px;
+  padding: 8px 0;
   border-bottom: 1px solid rgba(0, 255, 136, 0.2);
   margin-bottom: 10px;
 }
 
 .tab-btn {
   flex: 1;
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(0, 255, 136, 0.3);
   border-radius: 4px;
   color: rgba(0, 255, 136, 0.6);
   font-family: 'Rajdhani', 'Roboto Mono', monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -168,7 +168,7 @@ onBeforeUnmount(() => {
 }
 
 .tab-content {
-  min-height: 250px;
+  min-height: 205px;
 }
 
 .coldchain-panel,
@@ -178,6 +178,6 @@ onBeforeUnmount(() => {
 
 .chart-box {
   width: 100%;
-  height: 250px;
+  height: 200px;
 }
 </style>

@@ -27,8 +27,8 @@ defineProps({
 .right-panel {
   position: absolute;
   right: 20px;
-  top: 200px;
-  width: clamp(380px, 26vw, 480px);
+  top: 250px;
+  width: clamp(320px, 22vw, 400px);
   z-index: 998;
 }
 </style>
